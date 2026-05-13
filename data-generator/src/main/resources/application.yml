@@ -1,0 +1,24 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5433/shop
+    username: shop
+    password: shop
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+    open-in-view: false
+
+datagen:
+  new-customer-rate: 0.3      # peluang bikin customer baru per tick
+  order-per-tick: 5           # jumlah order yang dibuat per tick
+  status-update-rate: 0.4     # peluang update status order per tick
+  tick-interval-ms: 2000
+
+logging:
+  level:
+    com.example.datagen: INFO
+    org.hibernate.SQL: WARN

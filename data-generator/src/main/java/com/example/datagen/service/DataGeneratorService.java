@@ -1,0 +1,122 @@
+package com.example.datagen.service;
+
+import com.example.datagen.entity.Customer;
+import com.example.datagen.entity.Order;
+import com.example.datagen.entity.OrderItem;
+import com.example.datagen.entity.Product;
+import com.example.datagen.repository.CustomerRepository;
+import com.example.datagen.repository.OrderItemRepository;
+import com.example.datagen.repository.OrderRepository;
+import com.example.datagen.repository.ProductRepository;
+import net.datafaker.Faker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+
+@Service
+public class DataGeneratorService {
+
+    private static final Logger log = LoggerFactory.getLogger(DataGeneratorService.class);
+    private static final List<String> NEXT_STATUSES = List.of("PAID", "SHIPPED", "DELIVERED", "CANCELLED");
+
+    private final CustomerRepository customers;
+    private final ProductRepository products;
+    private final OrderRepository orders;
+    private final OrderItemRepository orderItems;
+    private final Faker faker = new Faker();
+
+    @Value("${datagen.new-customer-rate}")
+    private double newCustomerRate;
+
+    @Value("${datagen.order-per-tick}")
+    private int orderPerTick;
+
+    @Value("${datagen.status-update-rate}")
+    private double statusUpdateRate;
+
+    public DataGeneratorService(CustomerRepository customers,
+                                ProductRepository products,
+                                OrderRepository orders,
+                                OrderItemRepository orderItems) {
+        this.customers = customers;
+        this.products = products;
+        this.orders = orders;
+        this.orderItems = orderItems;
+    }
+
+    @Scheduled(fixedDelayString = "${datagen.tick-interval-ms}")
+    @Transactional
+    public void tick() {
+        try {
+            if (ThreadLocalRandom.current().nextDouble() < newCustomerRate) {
+                createCustomer();
+            }
+            for (int i = 0; i < orderPerTick; i++) {
+                createOrder();
+            }
+            if (ThreadLocalRandom.current().nextDouble() < statusUpdateRate) {
+                advanceOrderStatus();
+            }
+        } catch (Exception e) {
+            log.error("tick failed", e);
+        }
+    }
+
+    private void createCustomer() {
+        Customer c = new Customer();
+        c.setName(faker.name().fullName());
+        c.setEmail(faker.internet().emailAddress());
+        c.setCity(faker.address().city());
+        customers.save(c);
+        log.info("new customer id={} email={}", c.getId(), c.getEmail());
+    }
+
+    private void createOrder() {
+        Optional<Customer> maybeCustomer = customers.pickRandom();
+        if (maybeCustomer.isEmpty()) {
+            createCustomer();
+            return;
+        }
+        int itemCount = ThreadLocalRandom.current().nextInt(1, 4);
+        List<Product> picked = products.pickRandom(itemCount);
+        if (picked.isEmpty()) return;
+
+        Order order = new Order();
+        order.setCustomerId(maybeCustomer.get().getId());
+        order.setStatus("PLACED");
+        order.setTotalAmount(BigDecimal.ZERO);
+        orders.save(order);
+
+        BigDecimal total = BigDecimal.ZERO;
+        for (Product p : picked) {
+            int qty = ThreadLocalRandom.current().nextInt(1, 4);
+            OrderItem item = new OrderItem();
+            item.setOrderId(order.getId());
+            item.setProductId(p.getId());
+            item.setQuantity(qty);
+            item.setUnitPrice(p.getPrice());
+            orderItems.save(item);
+            total = total.add(p.getPrice().multiply(BigDecimal.valueOf(qty)));
+        }
+        order.setTotalAmount(total);
+        orders.save(order);
+        log.info("new order id={} items={} total={}", order.getId(), picked.size(), total);
+    }
+
+    private void advanceOrderStatus() {
+        orders.pickActive().ifPresent(order -> {
+            String next = NEXT_STATUSES.get(ThreadLocalRandom.current().nextInt(NEXT_STATUSES.size()));
+            order.setStatus(next);
+            orders.save(order);
+            log.info("order id={} -> {}", order.getId(), next);
+        });
+    }
+}
