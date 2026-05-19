@@ -264,7 +264,8 @@ function setView(view) {
   const isFunnel = view === 'funnel';
   const isDistribution = view === 'distribution';
   const isPreaggregate = view === 'preaggregate';
-  const isDashboard = isStreaming || isFunnel || isDistribution || isPreaggregate;
+  const isTimetravel = view === 'timetravel';
+  const isDashboard = isStreaming || isFunnel || isDistribution || isPreaggregate || isTimetravel;
   const isInspector = !isDashboard && !!VIEWS[view];
   if (!isDashboard && !isInspector) view = 'customers';
 
@@ -281,6 +282,7 @@ function setView(view) {
   document.getElementById('funnelView').hidden = !isFunnel;
   document.getElementById('distributionView').hidden = !isDistribution;
   document.getElementById('preaggregateView').hidden = !isPreaggregate;
+  document.getElementById('timetravelView').hidden = !isTimetravel;
   document.body.classList.toggle('mode-streaming', isDashboard);
 
   // deactivate everything first, then activate the one we want
@@ -288,11 +290,13 @@ function setView(view) {
   funnelDeactivate();
   distributionDeactivate();
   preaggregateDeactivate();
+  timetravelDeactivate();
 
   if (isStreaming) streamingActivate();
   else if (isFunnel) funnelActivate();
   else if (isDistribution) distributionActivate();
   else if (isPreaggregate) preaggregateActivate();
+  else if (isTimetravel) timetravelActivate();
   else load({ animate: true });
 }
 
@@ -305,7 +309,8 @@ function scheduleAutoRefresh() {
     const inDashboard = state.view === 'streaming'
                      || state.view === 'funnel'
                      || state.view === 'distribution'
-                     || state.view === 'preaggregate';
+                     || state.view === 'preaggregate'
+                     || state.view === 'timetravel';
     if (!inDashboard
         && state.page === 0
         && document.visibilityState === 'visible') {
@@ -1022,6 +1027,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '5') location.hash = 'funnel';
   if (e.key === '6') location.hash = 'distribution';
   if (e.key === '7') location.hash = 'preaggregate';
+  if (e.key === '8') location.hash = 'timetravel';
 });
 
 /* =================================================================== */
@@ -1592,6 +1598,211 @@ document.addEventListener('DOMContentLoaded', () => {
       document.querySelectorAll('.res-btn').forEach(b =>
         b.classList.toggle('active', b === btn));
       if (preaggState.active) preaggregateLoad();
+    });
+  });
+});
+
+/* =================================================================== */
+/* TIME TRAVEL — point-in-time snapshot via argMax                       */
+/* =================================================================== */
+
+const ttState = {
+  active: false,
+  at: null,           // selected unix timestamp
+  minTs: null,        // slider min
+  maxTs: null,        // slider max
+  boundsTimer: null,  // periodic max refresh
+  fetchDebounce: null,
+  inFlight: 0,
+};
+
+function fmtTimestamp(unixSec) {
+  if (!unixSec) return '—';
+  const d = new Date(unixSec * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function fmtRelative(targetUnix) {
+  if (!targetUnix) return '';
+  const nowSec = Math.floor(Date.now() / 1000);
+  const diff = nowSec - targetUnix;
+  if (diff < 5) return 'now';
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) {
+    const m = Math.floor(diff / 60);
+    const s = diff % 60;
+    return m + 'm ' + (s ? s + 's' : '') + ' ago';
+  }
+  if (diff < 86400) {
+    const h = Math.floor(diff / 3600);
+    const m = Math.floor((diff % 3600) / 60);
+    return h + 'h ' + (m ? m + 'm' : '') + ' ago';
+  }
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function updateSliderUI() {
+  const slider = document.getElementById('ttSlider');
+  if (!slider || !ttState.minTs || !ttState.maxTs) return;
+  // value = (at - min) / (max - min) * 100
+  const range = ttState.maxTs - ttState.minTs;
+  const pos = range > 0 ? ((ttState.at - ttState.minTs) / range) * 100 : 100;
+  slider.value = Math.max(0, Math.min(100, pos));
+  setText('ttMin', fmtTimestamp(ttState.minTs).slice(11, 16)); // HH:MM
+  setText('ttMax', 'NOW');
+}
+
+function renderTtTimestamp() {
+  const tsStr = fmtTimestamp(ttState.at);
+  const relStr = fmtRelative(ttState.at);
+  setText('ttTimestamp', tsStr);
+  setText('ttRelative', relStr);
+  setText('ttHeaderTime', tsStr);
+}
+
+function renderStatusBars(stats) {
+  const total = Number(stats.total_orders) || 0;
+  const statusMap = {
+    PLACED:    Number(stats.placed) || 0,
+    PAID:      Number(stats.paid) || 0,
+    SHIPPED:   Number(stats.shipped) || 0,
+    DELIVERED: Number(stats.delivered) || 0,
+    CANCELLED: Number(stats.cancelled) || 0,
+  };
+  // find max for relative bar width
+  const maxCount = Math.max(...Object.values(statusMap), 1);
+
+  for (const [status, count] of Object.entries(statusMap)) {
+    const row = document.querySelector(`.status-bar-row[data-status="${status}"]`);
+    if (!row) continue;
+    const widthPct = (count / maxCount) * 100;
+    const sharePct = total > 0 ? (count * 100 / total) : 0;
+    const fill = row.querySelector('.sb-fill');
+    const val = row.querySelector('.sb-val');
+    const pct = row.querySelector('.sb-pct');
+    if (fill) fill.style.inset = `0 ${100 - widthPct}% 0 0`;
+    if (val)  val.textContent = fmtCountShort(count);
+    if (pct)  pct.textContent = sharePct.toFixed(1) + '%';
+  }
+}
+
+function renderTtStats(stats) {
+  const setTile = (id, val) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    if (node.textContent !== val) {
+      node.textContent = val;
+      flashTile(id);
+    }
+  };
+  setTile('tt-total',     fmtCountShort(stats.total_orders));
+  setTile('tt-customers', fmtCountShort(stats.unique_customers));
+  setTile('tt-revenue',   fmtMoneyShort(stats.total_revenue));
+  setText('tt-revenue-completed',
+    'completed: ' + fmtMoneyShort(stats.revenue_completed) +
+    '  ·  lost: ' + fmtMoneyShort(stats.revenue_lost));
+
+  setTile('tt-avg',    fmtMoneyShort(stats.avg_amount));
+  setTile('tt-median', fmtMoneyShort(stats.median_amount));
+  setTile('tt-p95',    fmtMoneyShort(stats.p95_amount));
+  setTile('tt-max',    fmtMoneyShort(stats.max_amount));
+  setText('tt-min',    'min: ' + fmtMoneyShort(stats.min_amount));
+
+  renderStatusBars(stats);
+}
+
+async function ttFetch() {
+  ttState.inFlight++;
+  const token = ttState.inFlight;
+  try {
+    const url = '/api/metrics/timetravel?at=' + ttState.at;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const body = await res.json();
+    if (token !== ttState.inFlight) return;
+
+    // update bounds (max advances over time)
+    if (body.bounds) {
+      ttState.minTs = Number(body.bounds.min_ts) || ttState.minTs;
+      ttState.maxTs = Number(body.bounds.max_ts) || ttState.maxTs;
+    }
+    if (body.stats) renderTtStats(body.stats);
+    setText('ttElapsed', body.elapsedMs + ' ms');
+    updateSliderUI();
+  } catch (e) {
+    console.error('[timetravel]', e);
+    setText('ttElapsed', '⚠ ' + (e.message || 'error'));
+  }
+}
+
+function ttFetchDebounced() {
+  clearTimeout(ttState.fetchDebounce);
+  ttState.fetchDebounce = setTimeout(ttFetch, 180);
+}
+
+function ttSetAt(unixSec) {
+  if (ttState.minTs && unixSec < ttState.minTs) unixSec = ttState.minTs;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (unixSec > nowSec) unixSec = nowSec;
+  ttState.at = unixSec;
+  renderTtTimestamp();
+  updateSliderUI();
+  ttFetchDebounced();
+}
+
+function timetravelActivate() {
+  ttState.active = true;
+  // initial fetch (defaults to now if at not set)
+  if (!ttState.at) ttState.at = Math.floor(Date.now() / 1000);
+  renderTtTimestamp();
+  ttFetch();
+
+  // periodic refresh of max bound + relative time text
+  clearInterval(ttState.boundsTimer);
+  ttState.boundsTimer = setInterval(() => {
+    if (!ttState.active) return;
+    // advance max_ts to now
+    ttState.maxTs = Math.floor(Date.now() / 1000);
+    updateSliderUI();
+    renderTtTimestamp(); // refresh relative "x ago" label
+  }, 1000);
+}
+
+function timetravelDeactivate() {
+  ttState.active = false;
+  clearInterval(ttState.boundsTimer);
+  clearTimeout(ttState.fetchDebounce);
+}
+
+/* Wire slider + preset buttons */
+document.addEventListener('DOMContentLoaded', () => {
+  const slider = document.getElementById('ttSlider');
+  if (slider) {
+    slider.addEventListener('input', () => {
+      if (!ttState.minTs || !ttState.maxTs) return;
+      const range = ttState.maxTs - ttState.minTs;
+      const pos = Number(slider.value) / 100;
+      const unix = Math.round(ttState.minTs + range * pos);
+      ttState.at = unix;
+      renderTtTimestamp();
+      ttFetchDebounced();
+    });
+  }
+
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.offset != null) {
+        // jump to NOW - offset seconds
+        const offset = parseInt(btn.dataset.offset, 10);
+        const target = Math.floor(Date.now() / 1000) - offset;
+        ttSetAt(target);
+      } else if (btn.dataset.step != null) {
+        // step ± N seconds from current
+        const step = parseInt(btn.dataset.step, 10);
+        ttSetAt((ttState.at || Math.floor(Date.now() / 1000)) + step);
+      }
     });
   });
 });

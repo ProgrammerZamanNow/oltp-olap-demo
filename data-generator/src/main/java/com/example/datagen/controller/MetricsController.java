@@ -558,6 +558,71 @@ public class MetricsController {
         return body;
     }
 
+    /**
+     * Time-travel snapshot: state lengkap order pada timestamp T tertentu.
+     * Showcase: argMax(value, sortKey) — untuk tiap id, ambil row dengan
+     * updated_at terbesar yang masih <= T. Hasil = state seperti waktu itu.
+     * Pattern event sourcing + point-in-time query.
+     */
+    @GetMapping("/timetravel")
+    public Map<String, Object> timeTravel(@RequestParam(required = false) Long at) {
+        long atTime = (at != null) ? at : (System.currentTimeMillis() / 1000);
+
+        // 1) Bounds untuk slider (min event time, sekarang)
+        String boundsSql = """
+            SELECT
+              toUnixTimestamp(min(updated_at)) AS min_ts,
+              toUnixTimestamp(now())            AS max_ts
+            FROM shop_analytics.orders_events
+            """;
+        Map<String, Object> bounds = ch.queryForMap(boundsSql);
+
+        // 2) Snapshot stats pada T — single query semua aggregate
+        String statsSql = """
+            WITH snap AS (
+              SELECT
+                id,
+                argMax(status, updated_at)       AS status,
+                argMax(total_amount, updated_at) AS amount,
+                argMax(customer_id, updated_at)  AS customer_id,
+                argMax(is_deleted, updated_at)   AS is_deleted
+              FROM shop_analytics.orders_events
+              WHERE updated_at <= fromUnixTimestamp(?)
+              GROUP BY id
+            )
+            SELECT
+              count()                                                AS total_orders,
+              countIf(status = 'PLACED')                             AS placed,
+              countIf(status = 'PAID')                               AS paid,
+              countIf(status = 'SHIPPED')                            AS shipped,
+              countIf(status = 'DELIVERED')                          AS delivered,
+              countIf(status = 'CANCELLED')                          AS cancelled,
+              round(sum(amount), 2)                                  AS total_revenue,
+              round(avg(amount), 2)                                  AS avg_amount,
+              round(median(amount), 2)                               AS median_amount,
+              round(quantile(0.95)(toFloat64(amount)), 2)            AS p95_amount,
+              round(max(amount), 2)                                  AS max_amount,
+              round(min(amount), 2)                                  AS min_amount,
+              uniqExact(customer_id)                                 AS unique_customers,
+              round(sumIf(amount, status IN ('PAID','SHIPPED','DELIVERED')), 2) AS revenue_completed,
+              round(sumIf(amount, status = 'CANCELLED'), 2)          AS revenue_lost
+            FROM snap
+            WHERE is_deleted = 0
+            """;
+
+        long t0 = System.nanoTime();
+        Map<String, Object> stats = ch.queryForMap(statsSql, atTime);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+
+        var body = new LinkedHashMap<String, Object>();
+        body.put("at", atTime);
+        body.put("bounds", bounds);
+        body.put("stats", stats);
+        body.put("elapsedMs", elapsedMs);
+        body.put("sql", statsSql.strip().replace("?", String.valueOf(atTime)));
+        return body;
+    }
+
     private static long sumLong(List<Map<String, Object>> rows, String key) {
         long total = 0;
         for (var r : rows) {

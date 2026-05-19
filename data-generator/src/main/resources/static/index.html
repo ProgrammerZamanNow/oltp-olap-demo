@@ -78,6 +78,11 @@
       <span class="nav-label">PRE-AGG</span>
       <span class="nav-tag">OLAP</span>
     </a>
+    <a href="#timetravel" class="nav-item nav-item-olap" data-view="timetravel">
+      <span class="nav-num">08</span>
+      <span class="nav-label">TIME-TRAVEL</span>
+      <span class="nav-tag">OLAP</span>
+    </a>
     <div class="nav-spacer"></div>
     <a class="nav-ext" href="http://localhost:8123/play" target="_blank" rel="noopener">
       <span>CLICKHOUSE</span>
@@ -740,6 +745,173 @@
             </div>
           </header>
           <pre class="sql-box" id="preaggSqlBox"></pre>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ TIME TRAVEL VIEW (point-in-time snapshot) ============ -->
+    <div id="timetravelView" hidden>
+      <section class="dash-header">
+        <div class="dash-title">
+          <span class="dash-eyebrow">CLICKHOUSE · POINT-IN-TIME</span>
+          <h1 class="dash-h1">TIME TRAVEL · STATE AT ANY MOMENT</h1>
+          <p class="dash-sub">
+            Geser slider untuk lihat state order pada waktu apapun di masa lalu.
+            Pakai <span class="ch-fn">argMax(col, updated_at)</span> di
+            <span class="ch-fn">orders_events</span> — tiap order, ambil row
+            terakhir yang masih ≤ T.
+          </p>
+        </div>
+        <div class="dash-status">
+          <div class="dash-status-line">
+            <span class="ds-dot"></span>
+            <span class="ds-label">QUERY</span>
+            <span class="ds-val" id="ttElapsed">— ms</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">EVENTS</span>
+            <span class="ds-val">orders_events</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- TIME SLIDER -->
+      <section class="card time-slider-card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">SELECTED TIME</h2>
+            <div class="card-sub">
+              Drag slider, atau klik preset. Dashboard di bawah refresh otomatis.
+            </div>
+          </div>
+          <div class="time-readout">
+            <span class="time-readout-main" id="ttTimestamp">—</span>
+            <span class="time-readout-sub" id="ttRelative">—</span>
+          </div>
+        </header>
+        <div class="slider-wrap">
+          <input type="range" id="ttSlider" class="time-slider" min="0" max="100" value="100" step="1" />
+          <div class="slider-range">
+            <span id="ttMin">--:--</span>
+            <span class="slider-axis-mid">←  PAST   ·   NOW  →</span>
+            <span id="ttMax">NOW</span>
+          </div>
+        </div>
+        <div class="preset-buttons">
+          <button class="preset-btn" data-offset="86400">-1d</button>
+          <button class="preset-btn" data-offset="3600">-1h</button>
+          <button class="preset-btn" data-offset="900">-15m</button>
+          <button class="preset-btn" data-offset="300">-5m</button>
+          <button class="preset-btn" data-offset="60">-1m</button>
+          <button class="preset-btn" data-offset="0">NOW</button>
+          <span class="preset-spacer"></span>
+          <button class="preset-btn step-btn" data-step="-60">«  -1m</button>
+          <button class="preset-btn step-btn" data-step="-10">«  -10s</button>
+          <button class="preset-btn step-btn" data-step="10">+10s  »</button>
+          <button class="preset-btn step-btn" data-step="60">+1m  »</button>
+        </div>
+      </section>
+
+      <!-- HEADLINE STATS -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            Snapshot order pada
+            <span class="ch-fn" id="ttHeaderTime">—</span>
+          </div>
+        </div>
+        <div class="tile-grid tile-grid-3">
+          <div class="tile tile-orders">
+            <div class="tile-tag">TOTAL ORDERS</div>
+            <div class="tile-val" id="tt-total">—</div>
+            <div class="tile-foot">unique order ids</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">UNIQUE CUSTOMERS</div>
+            <div class="tile-val" id="tt-customers">—</div>
+            <div class="tile-foot">uniqExact</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">TOTAL REVENUE</div>
+            <div class="tile-val" id="tt-revenue">—</div>
+            <div class="tile-foot" id="tt-revenue-completed">completed: Rp —</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STATUS DISTRIBUTION -->
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">STATUS DISTRIBUTION · at selected time</h2>
+            <div class="card-sub">
+              Sebaran order berdasarkan status pada timestamp pilihan —
+              pakai <span class="ch-fn">countIf(status = ...)</span> di hasil snapshot.
+            </div>
+          </div>
+        </header>
+        <div class="status-bars" id="ttStatusBars">
+          <div class="status-bar-row" data-status="PLACED">
+            <div class="sb-label">PLACED</div>
+            <div class="sb-track"><div class="sb-fill"></div></div>
+            <div class="sb-val">—</div>
+            <div class="sb-pct">—%</div>
+          </div>
+          <div class="status-bar-row" data-status="PAID">
+            <div class="sb-label">PAID</div>
+            <div class="sb-track"><div class="sb-fill"></div></div>
+            <div class="sb-val">—</div>
+            <div class="sb-pct">—%</div>
+          </div>
+          <div class="status-bar-row" data-status="SHIPPED">
+            <div class="sb-label">SHIPPED</div>
+            <div class="sb-track"><div class="sb-fill"></div></div>
+            <div class="sb-val">—</div>
+            <div class="sb-pct">—%</div>
+          </div>
+          <div class="status-bar-row" data-status="DELIVERED">
+            <div class="sb-label">DELIVERED</div>
+            <div class="sb-track"><div class="sb-fill"></div></div>
+            <div class="sb-val">—</div>
+            <div class="sb-pct">—%</div>
+          </div>
+          <div class="status-bar-row" data-status="CANCELLED">
+            <div class="sb-label">CANCELLED</div>
+            <div class="sb-track"><div class="sb-fill"></div></div>
+            <div class="sb-val">—</div>
+            <div class="sb-pct">—%</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AMOUNT STATISTICS -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            Distribusi nilai order pada T
+          </div>
+        </div>
+        <div class="tile-grid tile-grid-4">
+          <div class="tile tile-rev">
+            <div class="tile-tag">AVG ORDER</div>
+            <div class="tile-val" id="tt-avg">—</div>
+            <div class="tile-foot">avg(amount)</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">MEDIAN · P50</div>
+            <div class="tile-val" id="tt-median">—</div>
+            <div class="tile-foot">median(amount)</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">P95</div>
+            <div class="tile-val" id="tt-p95">—</div>
+            <div class="tile-foot">quantile(0.95)</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">MAX ORDER</div>
+            <div class="tile-val" id="tt-max">—</div>
+            <div class="tile-foot" id="tt-min">min: Rp —</div>
+          </div>
         </div>
       </section>
     </div>
