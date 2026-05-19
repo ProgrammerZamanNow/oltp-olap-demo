@@ -263,7 +263,8 @@ function setView(view) {
   const isStreaming = view === 'streaming';
   const isFunnel = view === 'funnel';
   const isDistribution = view === 'distribution';
-  const isDashboard = isStreaming || isFunnel || isDistribution;
+  const isPreaggregate = view === 'preaggregate';
+  const isDashboard = isStreaming || isFunnel || isDistribution || isPreaggregate;
   const isInspector = !isDashboard && !!VIEWS[view];
   if (!isDashboard && !isInspector) view = 'customers';
 
@@ -279,16 +280,19 @@ function setView(view) {
   document.getElementById('streamingView').hidden = !isStreaming;
   document.getElementById('funnelView').hidden = !isFunnel;
   document.getElementById('distributionView').hidden = !isDistribution;
+  document.getElementById('preaggregateView').hidden = !isPreaggregate;
   document.body.classList.toggle('mode-streaming', isDashboard);
 
   // deactivate everything first, then activate the one we want
   streamingDeactivate();
   funnelDeactivate();
   distributionDeactivate();
+  preaggregateDeactivate();
 
   if (isStreaming) streamingActivate();
   else if (isFunnel) funnelActivate();
   else if (isDistribution) distributionActivate();
+  else if (isPreaggregate) preaggregateActivate();
   else load({ animate: true });
 }
 
@@ -300,7 +304,8 @@ function scheduleAutoRefresh() {
     await refreshAllCounts();
     const inDashboard = state.view === 'streaming'
                      || state.view === 'funnel'
-                     || state.view === 'distribution';
+                     || state.view === 'distribution'
+                     || state.view === 'preaggregate';
     if (!inDashboard
         && state.page === 0
         && document.visibilityState === 'visible') {
@@ -1016,6 +1021,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '4') location.hash = 'streaming';
   if (e.key === '5') location.hash = 'funnel';
   if (e.key === '6') location.hash = 'distribution';
+  if (e.key === '7') location.hash = 'preaggregate';
 });
 
 /* =================================================================== */
@@ -1258,3 +1264,334 @@ function distributionDeactivate() {
   clearTimeout(distState.timer);
   distState.timer = null;
 }
+
+/* =================================================================== */
+/* PRE-AGGREGATION DASHBOARD — AggregatingMergeTree showcase             */
+/* =================================================================== */
+
+const PREAGG_REFRESH_MS = 3000;
+const preaggCharts = { parity: null, live: null };
+const preaggState = {
+  active: false,
+  timer: null,
+  inFlight: 0,
+  windowMin: 60,        // for comparison section
+  liveRes: 1,           // resolution in minutes for hero chart
+  liveWin: 60,          // window in minutes for hero chart
+};
+
+function initPreaggCharts() {
+  if (typeof echarts === 'undefined') return;
+  if (!preaggCharts.parity) {
+    const el = document.getElementById('chartParity');
+    if (el) preaggCharts.parity = echarts.init(el, null, { renderer: 'canvas' });
+  }
+  if (!preaggCharts.live) {
+    const el = document.getElementById('chartLive');
+    if (el) preaggCharts.live = echarts.init(el, null, { renderer: 'canvas' });
+  }
+  if (!window.__preaggResizeBound) {
+    window.addEventListener('resize', () => {
+      Object.values(preaggCharts).forEach(c => c && c.resize());
+    });
+    window.__preaggResizeBound = true;
+  }
+}
+
+function renderLiveTiles(tiles, tilesMs) {
+  const today = tiles.today || {};
+  const hour  = tiles.hour  || {};
+  const last5 = tiles.last5m || {};
+  const prev5 = tiles.prev5m || {};
+
+  const setTile = (id, val) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    if (node.textContent !== val) {
+      node.textContent = val;
+      flashTile(id);
+    }
+  };
+
+  setTile('tile-live-today', fmtCountShort(today.events));
+  setText('tile-live-today-rev', fmtMoneyShort(today.revenue));
+  setTile('tile-live-hour',  fmtCountShort(hour.events));
+  setText('tile-live-hour-rev',  fmtMoneyShort(hour.revenue));
+
+  // delta last5 vs prev5
+  const lastVal = Number(last5.events) || 0;
+  const prevVal = Number(prev5.events) || 0;
+  const delta = lastVal - prevVal;
+  const pct = prevVal > 0 ? (delta * 100 / prevVal) : 0;
+  setTile('tile-live-last5', fmtCountShort(lastVal));
+  const deltaNode = document.getElementById('tile-live-delta');
+  if (deltaNode) {
+    const sign = delta > 0 ? '+' : '';
+    deltaNode.textContent = 'Δ ' + sign + fmtCountShort(delta) + '  (' + sign + pct.toFixed(1) + '%)';
+    deltaNode.classList.toggle('delta-up', delta > 0);
+    deltaNode.classList.toggle('delta-down', delta < 0);
+  }
+
+  setTile('tile-live-p95', fmtMoneyShort(hour.p95));
+  setText('liveTilesElapsed', tilesMs + ' ms');
+}
+
+function renderLiveChart(rows, chartMs) {
+  if (!preaggCharts.live) return;
+
+  const events = rows.map(r => [r.bucket, Number(r.events) || 0]);
+  const revenue = rows.map(r => [r.bucket, Number(r.revenue) || 0]);
+
+  const opt = baseChartOption();
+  opt.legend = {
+    data: ['events', 'revenue'],
+    textStyle: { color: '#a4a4ad', fontSize: 10 },
+    right: 12, top: 0,
+    itemWidth: 14, itemHeight: 2,
+  };
+  opt.grid.top = 30;
+  opt.yAxis = [
+    {
+      type: 'value', name: 'events',
+      nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#6c6c78', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#1a1a23', type: 'dashed' } },
+    },
+    {
+      type: 'value', name: 'Rp',
+      nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: {
+        color: '#6c6c78', fontSize: 10,
+        formatter: (v) => v >= 1_000_000_000 ? (v / 1_000_000_000).toFixed(1) + 'B'
+          : v >= 1_000_000 ? (v / 1_000_000).toFixed(0) + 'M'
+          : (v / 1000).toFixed(0) + 'K',
+      },
+      splitLine: { show: false },
+    },
+  ];
+  // Format x-axis based on resolution
+  const resMin = preaggState.liveRes;
+  opt.xAxis.axisLabel.formatter = (v) => {
+    const d = new Date(v);
+    const pad = (n) => String(n).padStart(2, '0');
+    if (resMin >= 1440) return `${d.getMonth() + 1}/${d.getDate()}`;
+    if (resMin >= 60)   return `${pad(d.getHours())}:00`;
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  opt.tooltip.formatter = (params) => {
+    if (!params.length) return '';
+    const ts = new Date(params[0].value[0]);
+    const pad = (n) => String(n).padStart(2, '0');
+    let label;
+    if (resMin >= 1440) {
+      label = `${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())}`;
+    } else {
+      label = `${pad(ts.getHours())}:${pad(ts.getMinutes())}`;
+    }
+    let html = `<div style="color:#fafafa;font-weight:700;margin-bottom:6px">${label}</div>`;
+    for (const p of params) {
+      const isRev = p.seriesName === 'revenue';
+      const val = isRev ? fmtMoneyShort(p.value[1]) : fmtCountShort(p.value[1]);
+      html += `<div><span style="display:inline-block;width:8px;height:2px;background:${p.color};vertical-align:middle;margin-right:6px"></span>`
+        + `<span style="color:#a4a4ad">${p.seriesName}</span> · `
+        + `<span style="color:#fafafa">${val}</span></div>`;
+    }
+    return html;
+  };
+  opt.series = [
+    {
+      name: 'events', type: 'line', yAxisIndex: 0,
+      smooth: 0.2, symbol: 'circle', symbolSize: 4,
+      lineStyle: { color: '#ffb000', width: 2 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(255, 176, 0, 0.32)' },
+          { offset: 1, color: 'rgba(255, 176, 0, 0)' },
+        ]),
+      },
+      data: events,
+    },
+    {
+      name: 'revenue', type: 'line', yAxisIndex: 1,
+      smooth: 0.2, symbol: 'none',
+      lineStyle: { color: '#ff7ad9', width: 1.2, type: 'dashed' },
+      data: revenue,
+    },
+  ];
+  preaggCharts.live.setOption(opt, { notMerge: true });
+  setText('liveChartElapsed', chartMs + ' ms');
+}
+
+function renderPreaggTiles(body) {
+  const raw = body.raw || {};
+  const preAgg = body.preAgg || {};
+  const setTile = (id, val) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    if (node.textContent !== val) {
+      node.textContent = val;
+      flashTile(id);
+    }
+  };
+
+  setTile('tile-raw-ms', (raw.elapsedMs ?? '—') + ' ms');
+  setTile('tile-preagg-ms', (preAgg.elapsedMs ?? '—') + ' ms');
+
+  const speedup = body.speedup || 1;
+  setTile('tile-speedup', speedup.toFixed(1) + '×');
+
+  setTile('tile-raw-events', fmtCountShort(raw.totalEvents));
+  setText('tile-preagg-events', 'preagg ' + fmtCountShort(preAgg.totalEvents));
+
+  const matchPct = body.matchPct != null ? body.matchPct : 100;
+  setText('preaggMatch', matchPct.toFixed(2) + '%');
+}
+
+function renderParityChart(rawRows, preAggRows) {
+  if (!preaggCharts.parity) return;
+
+  const rawData = rawRows.map(r => [r.minute, Number(r.events) || 0]);
+  const preAggData = preAggRows.map(r => [r.minute, Number(r.events) || 0]);
+
+  const opt = baseChartOption();
+  opt.legend = {
+    data: ['raw (orders_events)', 'pre-agg (orders_per_minute)'],
+    textStyle: { color: '#a4a4ad', fontSize: 10 },
+    right: 12, top: 0,
+    itemWidth: 14, itemHeight: 2,
+  };
+  opt.grid.top = 30;
+  opt.yAxis = {
+    type: 'value',
+    name: 'events/min',
+    nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+    axisLine: { show: false }, axisTick: { show: false },
+    axisLabel: { color: '#6c6c78', fontSize: 10 },
+    splitLine: { lineStyle: { color: '#1a1a23', type: 'dashed' } },
+  };
+  opt.tooltip.formatter = (params) => {
+    if (!params.length) return '';
+    const ts = new Date(params[0].value[0]);
+    const pad = (n) => String(n).padStart(2, '0');
+    let html = `<div style="color:#fafafa;font-weight:700;margin-bottom:6px">`
+      + `${pad(ts.getHours())}:${pad(ts.getMinutes())}</div>`;
+    for (const p of params) {
+      html += `<div><span style="display:inline-block;width:8px;height:2px;background:${p.color};vertical-align:middle;margin-right:6px"></span>`
+        + `<span style="color:#a4a4ad">${p.seriesName}</span> · `
+        + `<span style="color:#fafafa">${fmtCountShort(p.value[1])}</span></div>`;
+    }
+    return html;
+  };
+  opt.series = [
+    {
+      name: 'raw (orders_events)', type: 'line',
+      smooth: 0.2, symbol: 'none',
+      lineStyle: { color: '#ffb000', width: 2.2 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(255, 176, 0, 0.25)' },
+          { offset: 1, color: 'rgba(255, 176, 0, 0)' },
+        ]),
+      },
+      data: rawData,
+    },
+    {
+      name: 'pre-agg (orders_per_minute)', type: 'line',
+      smooth: 0.2, symbol: 'none',
+      lineStyle: { color: '#ff7ad9', width: 1.2, type: 'dashed' },
+      data: preAggData,
+    },
+  ];
+  preaggCharts.parity.setOption(opt, { notMerge: true });
+}
+
+function renderPreaggSql(body) {
+  const rawSql = body.raw?.sql || '';
+  const preAggSql = body.preAgg?.sql || '';
+  const rawBox = document.getElementById('rawSqlBox');
+  const preAggBox = document.getElementById('preaggSqlBox');
+  if (rawBox) rawBox.textContent = rawSql;
+  if (preAggBox) preAggBox.textContent = preAggSql;
+
+  setText('rawElapsed', (body.raw?.elapsedMs ?? '—') + ' ms');
+  setText('preaggElapsed', (body.preAgg?.elapsedMs ?? '—') + ' ms');
+}
+
+async function preaggregateLoad() {
+  preaggState.inFlight++;
+  const token = preaggState.inFlight;
+  try {
+    const [live, body] = await Promise.all([
+      fetchMetric('/preaggregate-live',
+        `resolution=${preaggState.liveRes}&window=${preaggState.liveWin}`),
+      fetchMetric('/preaggregate', `minutes=${preaggState.windowMin}`),
+    ]);
+    if (token !== preaggState.inFlight) return;
+
+    renderLiveTiles(live.tiles || {}, live.tilesMs);
+    renderLiveChart(live.chart || [], live.chartMs);
+
+    renderPreaggTiles(body);
+    renderParityChart(body.raw?.rows || [], body.preAgg?.rows || []);
+    renderPreaggSql(body);
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    setText('preaggLastTick',
+      `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`);
+  } catch (e) {
+    console.error('[preaggregate]', e);
+    setText('preaggLastTick', '⚠ ' + (e.message || 'error'));
+  }
+}
+
+function preaggregateActivate() {
+  preaggState.active = true;
+  initPreaggCharts();
+  requestAnimationFrame(() => {
+    Object.values(preaggCharts).forEach(c => c && c.resize());
+  });
+  preaggregateLoad();
+  clearTimeout(preaggState.timer);
+  const tick = () => {
+    if (!preaggState.active) return;
+    if (document.visibilityState === 'visible') preaggregateLoad();
+    preaggState.timer = setTimeout(tick, PREAGG_REFRESH_MS);
+  };
+  preaggState.timer = setTimeout(tick, PREAGG_REFRESH_MS);
+}
+
+function preaggregateDeactivate() {
+  preaggState.active = false;
+  clearTimeout(preaggState.timer);
+  preaggState.timer = null;
+}
+
+/* Window picker (comparison) + Resolution picker (live hero) */
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.win-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const win = parseInt(btn.dataset.win, 10);
+      if (!win) return;
+      preaggState.windowMin = win;
+      document.querySelectorAll('.win-btn').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      if (preaggState.active) preaggregateLoad();
+    });
+  });
+
+  document.querySelectorAll('.res-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const res = parseInt(btn.dataset.res, 10);
+      const win = parseInt(btn.dataset.win, 10);
+      if (!res || !win) return;
+      preaggState.liveRes = res;
+      preaggState.liveWin = win;
+      document.querySelectorAll('.res-btn').forEach(b =>
+        b.classList.toggle('active', b === btn));
+      if (preaggState.active) preaggregateLoad();
+    });
+  });
+});

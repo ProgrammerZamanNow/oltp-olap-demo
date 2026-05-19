@@ -400,6 +400,173 @@ public class MetricsController {
         return response(data, exactMs + hllMs, exactSql + ";\n\n" + hllSql);
     }
 
+    /**
+     * Pre-aggregation showcase: SAMA query, dua source.
+     *  - RAW: scan ulang orders_events, group + agregat tiap call.
+     *  - PRE-AGG: baca state yang sudah di-pre-compute via
+     *    AggregatingMergeTree, hanya butuh sumMerge/countMerge.
+     * Untuk juta-an row, pre-agg bisa 50-100× lebih cepat.
+     */
+    @GetMapping("/preaggregate")
+    public Map<String, Object> preAggregate(@RequestParam(defaultValue = "60") int minutes) {
+        int safe = clamp(minutes, 5, 1440);
+
+        String rawSql = """
+            SELECT
+              toStartOfMinute(created_at) AS minute,
+              count()                     AS events,
+              round(sum(total_amount), 2) AS revenue,
+              round(quantile(0.95)(toFloat64(total_amount)), 2) AS p95
+            FROM shop_analytics.orders_events
+            WHERE created_at >= now() - INTERVAL %d MINUTE
+            GROUP BY minute
+            ORDER BY minute ASC
+            """.formatted(safe);
+
+        String preAggSql = """
+            SELECT
+              minute,
+              countMerge(events_count)                       AS events,
+              round(sumMerge(revenue_sum), 2)                AS revenue,
+              round(quantileMerge(p95_amount), 2)            AS p95
+            FROM shop_analytics.orders_per_minute
+            WHERE minute >= now() - INTERVAL %d MINUTE
+            GROUP BY minute
+            ORDER BY minute ASC
+            """.formatted(safe);
+
+        long t1 = System.nanoTime();
+        List<Map<String, Object>> rawRows = ch.queryForList(rawSql);
+        long rawMs = (System.nanoTime() - t1) / 1_000_000;
+
+        long t2 = System.nanoTime();
+        List<Map<String, Object>> preAggRows = ch.queryForList(preAggSql);
+        long preAggMs = (System.nanoTime() - t2) / 1_000_000;
+
+        long rawEvents = sumLong(rawRows, "events");
+        long preAggEvents = sumLong(preAggRows, "events");
+
+        var raw = new LinkedHashMap<String, Object>();
+        raw.put("rows", rawRows);
+        raw.put("elapsedMs", rawMs);
+        raw.put("totalEvents", rawEvents);
+        raw.put("sql", rawSql.strip());
+
+        var preAgg = new LinkedHashMap<String, Object>();
+        preAgg.put("rows", preAggRows);
+        preAgg.put("elapsedMs", preAggMs);
+        preAgg.put("totalEvents", preAggEvents);
+        preAgg.put("sql", preAggSql.strip());
+
+        var body = new LinkedHashMap<String, Object>();
+        body.put("raw", raw);
+        body.put("preAgg", preAgg);
+        body.put("speedup", preAggMs > 0 ? ((double) rawMs / preAggMs) : 1.0);
+        body.put("minutes", safe);
+        // Match check — allow small diff because raw vs preagg now() bisa beda mikrodetik
+        long diff = Math.abs(rawEvents - preAggEvents);
+        body.put("eventsDiff", diff);
+        body.put("matchPct", rawEvents > 0 ? (100.0 * (rawEvents - diff) / rawEvents) : 100.0);
+        return body;
+    }
+
+    /**
+     * Real dashboard powered by pre-aggregated state.
+     * Tiles & chart cuma baca dari `orders_per_minute` (AggregatingMergeTree).
+     * Showcase: state COMPOSABLE — bisa re-aggregate ke bucket apapun
+     * (1m / 5m / 15m / 1h / 1d) lewat GROUP BY toStartOfInterval, dari source yg sama.
+     */
+    @GetMapping("/preaggregate-live")
+    public Map<String, Object> preAggregateLive(
+            @RequestParam(defaultValue = "1") int resolution,
+            @RequestParam(defaultValue = "60") int window) {
+
+        int safeRes = clamp(resolution, 1, 1440);
+        int safeWin = clamp(window, 5, 10080);
+
+        // 1) Tile metrics — 4 window berbeda dalam satu UNION query
+        String tilesSql = """
+            SELECT 'today' AS bucket_label,
+                   countMerge(events_count) AS events,
+                   round(sumMerge(revenue_sum), 2) AS revenue,
+                   round(quantileMerge(p95_amount), 2) AS p95
+            FROM shop_analytics.orders_per_minute
+            WHERE minute >= toStartOfDay(now())
+            UNION ALL
+            SELECT 'hour',
+                   countMerge(events_count),
+                   round(sumMerge(revenue_sum), 2),
+                   round(quantileMerge(p95_amount), 2)
+            FROM shop_analytics.orders_per_minute
+            WHERE minute >= now() - INTERVAL 1 HOUR
+            UNION ALL
+            SELECT 'last5m',
+                   countMerge(events_count),
+                   round(sumMerge(revenue_sum), 2),
+                   round(quantileMerge(p95_amount), 2)
+            FROM shop_analytics.orders_per_minute
+            WHERE minute >= now() - INTERVAL 5 MINUTE
+            UNION ALL
+            SELECT 'prev5m',
+                   countMerge(events_count),
+                   round(sumMerge(revenue_sum), 2),
+                   round(quantileMerge(p95_amount), 2)
+            FROM shop_analytics.orders_per_minute
+            WHERE minute >= now() - INTERVAL 10 MINUTE
+              AND minute <  now() - INTERVAL 5 MINUTE
+            """;
+
+        long t0 = System.nanoTime();
+        List<Map<String, Object>> tilesRaw = ch.queryForList(tilesSql);
+        long tilesMs = (System.nanoTime() - t0) / 1_000_000;
+
+        var tiles = new LinkedHashMap<String, Map<String, Object>>();
+        for (var r : tilesRaw) {
+            tiles.put((String) r.get("bucket_label"), Map.of(
+                "events", r.getOrDefault("events", 0),
+                "revenue", r.getOrDefault("revenue", 0),
+                "p95", r.getOrDefault("p95", 0)
+            ));
+        }
+
+        // 2) Multi-resolution chart — SAMA state, GROUP BY berbeda
+        String chartSql = """
+            SELECT
+              toStartOfInterval(minute, INTERVAL %d MINUTE) AS bucket,
+              countMerge(events_count)                       AS events,
+              round(sumMerge(revenue_sum), 2)                AS revenue,
+              round(quantileMerge(p95_amount), 2)            AS p95
+            FROM shop_analytics.orders_per_minute
+            WHERE minute >= now() - INTERVAL %d MINUTE
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """.formatted(safeRes, safeWin);
+
+        long t1 = System.nanoTime();
+        List<Map<String, Object>> chartRows = ch.queryForList(chartSql);
+        long chartMs = (System.nanoTime() - t1) / 1_000_000;
+
+        var body = new LinkedHashMap<String, Object>();
+        body.put("tiles", tiles);
+        body.put("tilesMs", tilesMs);
+        body.put("chart", chartRows);
+        body.put("chartMs", chartMs);
+        body.put("resolution", safeRes);
+        body.put("window", safeWin);
+        body.put("tilesSql", tilesSql.strip());
+        body.put("chartSql", chartSql.strip());
+        return body;
+    }
+
+    private static long sumLong(List<Map<String, Object>> rows, String key) {
+        long total = 0;
+        for (var r : rows) {
+            Object v = r.get(key);
+            if (v instanceof Number n) total += n.longValue();
+        }
+        return total;
+    }
+
     private Map<String, Object> response(Object data, long elapsedMs, String sql) {
         var body = new LinkedHashMap<String, Object>();
         body.put("data", data);

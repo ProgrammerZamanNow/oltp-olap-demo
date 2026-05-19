@@ -743,17 +743,35 @@ tbody tr:last-child td { border-bottom: none; }
 body.mode-streaming .status-left { display: none; }
 body.mode-streaming .statusbar { justify-content: flex-end; }
 
+/* Inspector view: body fixed viewport (table-wrap has internal scroll).
+   Dashboard views: content jauh lebih tinggi dari viewport, body harus scroll. */
+body.mode-streaming { overflow-y: auto; }
+body.mode-streaming .content { flex: none; }
+
+/* #inspectorView wrapper harus jadi flex column supaya .table-wrap flex:1
+   bisa fill ruang tersisa dan internal scroll-nya kepakai. */
+#inspectorView {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+#inspectorView[hidden] { display: none !important; }
+
 /* --- Dashboard view wrappers --- */
 /* CSS display rule mengalahkan HTML `hidden` attribute, jadi harus reset eksplisit */
 #streamingView[hidden],
 #funnelView[hidden],
-#distributionView[hidden] {
+#distributionView[hidden],
+#preaggregateView[hidden] {
   display: none !important;
 }
 
 #streamingView,
 #funnelView,
-#distributionView {
+#distributionView,
+#preaggregateView {
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -1237,6 +1255,123 @@ code {
 .top3-chip:nth-child(1) .top3-chip-rank { color: var(--accent-bright); }
 .top3-chip:nth-child(2) .top3-chip-rank { color: var(--info); }
 .top3-chip:nth-child(3) .top3-chip-rank { color: var(--magenta); }
+
+/* =================================================================== */
+/* PRE-AGGREGATION VIEW                                                  */
+/* =================================================================== */
+
+.chart-box-parity { height: 260px; }
+
+.window-picker {
+  display: inline-flex;
+  border: 1px solid var(--border-2);
+  background: var(--bg);
+}
+
+.win-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-2);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.win-btn:last-child { border-right: none; }
+.win-btn:hover { color: var(--fg-bright); background: var(--bg-hover); }
+.win-btn.active {
+  color: var(--magenta);
+  background: rgba(255, 122, 217, 0.1);
+  text-shadow: 0 0 8px rgba(255, 122, 217, 0.45);
+}
+
+.sql-box {
+  margin: 0;
+  padding: 14px 18px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--fg);
+  white-space: pre;
+  overflow-x: auto;
+  background: transparent;
+  max-height: 280px;
+}
+
+.sql-box::-webkit-scrollbar { height: 8px; width: 8px; }
+.sql-box::-webkit-scrollbar-track { background: var(--bg-elev); }
+.sql-box::-webkit-scrollbar-thumb { background: var(--border-2); }
+
+/* Speedup tile gets extra-bold treatment */
+#tile-speedup { font-size: 32px; }
+
+.chart-box-live { height: 320px; }
+
+.res-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border-2);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.res-btn:last-child { border-right: none; }
+.res-btn:hover { color: var(--fg-bright); background: var(--bg-hover); }
+.res-btn.active {
+  color: var(--accent-bright);
+  background: rgba(255, 176, 0, 0.1);
+  text-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* Divider between hero live dashboard and verification section */
+.dash-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 14px 0 6px;
+  border-top: 1px dashed var(--border-2);
+  margin-top: 6px;
+  position: relative;
+}
+
+.divider-eyebrow {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  color: var(--magenta);
+  margin-bottom: 6px;
+}
+
+.divider-h2 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--fg-bright);
+  margin: 0 0 6px 0;
+}
+
+.divider-sub {
+  font-size: 11px;
+  color: var(--fg-dim);
+  max-width: 620px;
+}
+
+/* Last 5m tile delta color hints */
+#tile-live-delta.delta-up   { color: var(--success); }
+#tile-live-delta.delta-down { color: var(--danger); }
 
 /* =================================================================== */
 /* RESPONSIVE                                                            */

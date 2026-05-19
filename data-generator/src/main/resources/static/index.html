@@ -73,6 +73,11 @@
       <span class="nav-label">DISTRIBUTION</span>
       <span class="nav-tag">OLAP</span>
     </a>
+    <a href="#preaggregate" class="nav-item nav-item-olap" data-view="preaggregate">
+      <span class="nav-num">07</span>
+      <span class="nav-label">PRE-AGG</span>
+      <span class="nav-tag">OLAP</span>
+    </a>
     <div class="nav-spacer"></div>
     <a class="nav-ext" href="http://localhost:8123/play" target="_blank" rel="noopener">
       <span>CLICKHOUSE</span>
@@ -541,6 +546,200 @@
               <tbody></tbody>
             </table>
           </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ PRE-AGGREGATION VIEW (AggregatingMergeTree) ============ -->
+    <div id="preaggregateView" hidden>
+      <section class="dash-header">
+        <div class="dash-title">
+          <span class="dash-eyebrow">CLICKHOUSE · PRE-AGGREGATION</span>
+          <h1 class="dash-h1">DASHBOARD POWERED BY AGGREGATINGMERGETREE</h1>
+          <p class="dash-sub">
+            Tiles, chart dan rollup di bawah cuma baca state pre-computed dari
+            <span class="ch-fn">orders_per_minute</span>. State <em>composable</em> —
+            satu sumber, banyak resolusi (1m / 5m / 1h / 1d) lewat GROUP BY.
+          </p>
+        </div>
+        <div class="dash-status">
+          <div class="dash-status-line">
+            <span class="ds-dot"></span>
+            <span class="ds-label">AUTO-REFRESH</span>
+            <span class="ds-val">3.0s</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">LAST TICK</span>
+            <span class="ds-val" id="preaggLastTick">--:--:--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ HERO: LIVE DASHBOARD POWERED BY PRE-AGG ============ -->
+
+      <!-- TILES powered by pre-agg only -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            <span class="ch-fn">countMerge / sumMerge</span> ·
+            4 metric window berbeda dalam 1 UNION query
+          </div>
+          <div class="tiles-head-right">
+            <span class="ds-label">QUERY</span>
+            <span class="ds-val" id="liveTilesElapsed">—</span>
+          </div>
+        </div>
+        <div class="tile-grid tile-grid-4">
+          <div class="tile tile-orders">
+            <div class="tile-tag">EVENTS · TODAY</div>
+            <div class="tile-val" id="tile-live-today">—</div>
+            <div class="tile-foot" id="tile-live-today-rev">Rp —</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">EVENTS · LAST 1H</div>
+            <div class="tile-val" id="tile-live-hour">—</div>
+            <div class="tile-foot" id="tile-live-hour-rev">Rp —</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">LAST 5M · vs PREV 5M</div>
+            <div class="tile-val" id="tile-live-last5">—</div>
+            <div class="tile-foot" id="tile-live-delta">Δ —</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">P95 ORDER · LAST 1H</div>
+            <div class="tile-val" id="tile-live-p95">—</div>
+            <div class="tile-foot">via quantileMerge</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- MULTI-RESOLUTION CHART -->
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">EVENTS OVER TIME · re-bucket on demand</h2>
+            <div class="card-sub">
+              Sumber sama (<span class="ch-fn">orders_per_minute</span>), beda resolusi
+              lewat <span class="ch-fn">toStartOfInterval(minute, INTERVAL N MINUTE)</span> —
+              state composable.
+            </div>
+          </div>
+          <div class="card-controls">
+            <div class="window-picker">
+              <button class="res-btn active" data-res="1"     data-win="60">1m</button>
+              <button class="res-btn"        data-res="5"     data-win="360">5m</button>
+              <button class="res-btn"        data-res="15"    data-win="720">15m</button>
+              <button class="res-btn"        data-res="60"    data-win="1440">1h</button>
+              <button class="res-btn"        data-res="1440"  data-win="10080">1d</button>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="liveChartElapsed">—</span>
+            </div>
+          </div>
+        </header>
+        <div class="chart-box chart-box-live" id="chartLive"></div>
+      </section>
+
+      <!-- ============ PROOF SECTION: raw vs pre-agg comparison ============ -->
+
+      <section class="dash-divider">
+        <span class="divider-eyebrow">VERIFIKASI</span>
+        <h2 class="divider-h2">RAW vs PRE-AGG · data parity & speed</h2>
+        <p class="divider-sub">
+          Bukti pre-agg menghasilkan angka yang sama dengan raw query,
+          tapi jauh lebih murah di skala besar.
+        </p>
+        <div class="window-picker" style="margin-top: 10px;">
+          <button class="win-btn" data-win="15">15m</button>
+          <button class="win-btn active" data-win="60">1h</button>
+          <button class="win-btn" data-win="240">4h</button>
+          <button class="win-btn" data-win="720">12h</button>
+          <button class="win-btn" data-win="1440">24h</button>
+        </div>
+      </section>
+
+      <!-- COMPARISON TILES -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            Same logical query, same answer — bandingkan
+            <span class="ch-fn">scan + group</span> versus
+            <span class="ch-fn">sumMerge / countMerge</span>
+          </div>
+          <div class="tiles-head-right">
+            <span class="ds-label">DATA MATCH</span>
+            <span class="ds-val" id="preaggMatch">— %</span>
+          </div>
+        </div>
+        <div class="tile-grid tile-grid-4">
+          <div class="tile tile-orders">
+            <div class="tile-tag">RAW · query time</div>
+            <div class="tile-val" id="tile-raw-ms">—</div>
+            <div class="tile-foot">scan orders_events FULL</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">PRE-AGG · query time</div>
+            <div class="tile-val" id="tile-preagg-ms">—</div>
+            <div class="tile-foot">read AggregatingMergeTree state</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">SPEEDUP</div>
+            <div class="tile-val" id="tile-speedup">—</div>
+            <div class="tile-foot">raw_ms / preagg_ms</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">TOTAL EVENTS · raw</div>
+            <div class="tile-val" id="tile-raw-events">—</div>
+            <div class="tile-foot" id="tile-preagg-events">preagg —</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- OVERLAY CHART: raw vs preagg (should be identical) -->
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">DATA PARITY · raw vs pre-agg</h2>
+            <div class="card-sub">
+              Dua line harus saling tumpang-tindih. Kalau ada gap → MV ketinggalan
+              atau ada race condition di window <span class="ch-fn">now()</span>.
+            </div>
+          </div>
+          <div class="card-meta">
+            <span class="ds-label">EVENTS / MIN</span>
+          </div>
+        </header>
+        <div class="chart-box chart-box-parity" id="chartParity"></div>
+      </section>
+
+      <!-- SQL SIDE BY SIDE -->
+      <section class="card-row">
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">RAW SQL · scan + group by</h2>
+              <div class="card-sub">Scan semua row, agregat tiap kali. O(N).</div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">elapsed</span>
+              <span class="ds-val" id="rawElapsed">—</span>
+            </div>
+          </header>
+          <pre class="sql-box" id="rawSqlBox"></pre>
+        </div>
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">PRE-AGG SQL · read state + merge</h2>
+              <div class="card-sub">Baca state yang sudah pre-computed. O(bucket).</div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">elapsed</span>
+              <span class="ds-val" id="preaggElapsed">—</span>
+            </div>
+          </header>
+          <pre class="sql-box" id="preaggSqlBox"></pre>
         </div>
       </section>
     </div>

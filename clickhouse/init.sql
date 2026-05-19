@@ -158,6 +158,23 @@ ENGINE = MergeTree
 ORDER BY (id, updated_at);
 
 -- =====================================================================
+-- Pre-aggregation showcase: AggregatingMergeTree dengan MV-on-MV chain.
+-- Tiap minute bucket menyimpan state (count/sum/quantile) yang bisa
+-- di-merge ulang lewat fungsi *Merge. Dashboard query baca dari sini
+-- jauh lebih cepat daripada scan ulang orders_events tiap kali.
+-- =====================================================================
+
+CREATE TABLE shop_analytics.orders_per_minute
+(
+    minute       DateTime,
+    events_count AggregateFunction(count),
+    revenue_sum  AggregateFunction(sum, Decimal(14, 2)),
+    p95_amount   AggregateFunction(quantile(0.95), Float64)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY minute;
+
+-- =====================================================================
 -- Materialized views move messages from Kafka tables to target tables.
 -- =====================================================================
 
@@ -218,3 +235,14 @@ SELECT
     parseDateTime64BestEffortOrZero(updated_at, 3) AS updated_at,
     toUInt8(__deleted = 'true')                   AS is_deleted
 FROM shop_analytics.kafka_orders;
+
+-- MV-on-MV: setiap INSERT ke orders_events trigger MV ini, yang lalu
+-- agregat ke orders_per_minute. ClickHouse mendukung chain MV begini.
+CREATE MATERIALIZED VIEW shop_analytics.mv_orders_per_minute TO shop_analytics.orders_per_minute AS
+SELECT
+    toStartOfMinute(created_at)                  AS minute,
+    countState()                                  AS events_count,
+    sumState(total_amount)                        AS revenue_sum,
+    quantileState(0.95)(toFloat64(total_amount))  AS p95_amount
+FROM shop_analytics.orders_events
+GROUP BY minute;
