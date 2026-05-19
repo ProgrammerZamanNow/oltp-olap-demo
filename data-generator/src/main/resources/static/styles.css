@@ -746,12 +746,14 @@ body.mode-streaming .statusbar { justify-content: flex-end; }
 /* --- Dashboard view wrappers --- */
 /* CSS display rule mengalahkan HTML `hidden` attribute, jadi harus reset eksplisit */
 #streamingView[hidden],
-#funnelView[hidden] {
+#funnelView[hidden],
+#distributionView[hidden] {
   display: none !important;
 }
 
 #streamingView,
-#funnelView {
+#funnelView,
+#distributionView {
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -1117,6 +1119,124 @@ code {
   font-size: 10px;
   color: var(--fg);
 }
+
+/* =================================================================== */
+/* DISTRIBUTION VIEW — cardinality, quantile bands, period table         */
+/* =================================================================== */
+
+.chart-box-quantile { height: 300px; }
+
+/* Tile foot — line tambahan di bawah tile-val untuk ms / annotation */
+.tile-foot {
+  margin-top: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--fg-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-rev .tile-foot { color: rgba(255, 122, 217, 0.7); }
+
+/* Distribution tables (period-over-period, top-k) */
+.dist-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.dist-table-wrap::-webkit-scrollbar { width: 8px; }
+.dist-table-wrap::-webkit-scrollbar-track { background: var(--bg-elev); }
+.dist-table-wrap::-webkit-scrollbar-thumb { background: var(--border-2); }
+
+.dist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dist-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev-2);
+  z-index: 1;
+}
+
+.dist-table thead::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: var(--border-bright);
+}
+
+.dist-table th {
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+
+.dist-table th.num { text-align: right; }
+
+.dist-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.dist-table td.num { text-align: right; }
+
+.dist-table tbody tr {
+  transition: background 0.1s ease;
+  animation: row-in 0.32s ease both;
+}
+
+.dist-table tbody tr:hover { background: var(--bg-hover); }
+
+.dist-table .minute-col {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.dist-table .delta-up   { color: var(--success); font-weight: 600; }
+.dist-table .delta-down { color: var(--danger);  font-weight: 600; }
+.dist-table .delta-zero { color: var(--fg-mute); }
+
+.top3-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.top3-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  font-size: 11px;
+  color: var(--fg);
+  letter-spacing: 0.02em;
+}
+
+.top3-chip-rank {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+}
+
+.top3-chip:nth-child(1) { border-color: var(--accent); }
+.top3-chip:nth-child(1) .top3-chip-rank { color: var(--accent-bright); }
+.top3-chip:nth-child(2) .top3-chip-rank { color: var(--info); }
+.top3-chip:nth-child(3) .top3-chip-rank { color: var(--magenta); }
 
 /* =================================================================== */
 /* RESPONSIVE                                                            */

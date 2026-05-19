@@ -68,6 +68,11 @@
       <span class="nav-label">FUNNEL</span>
       <span class="nav-tag">OLAP</span>
     </a>
+    <a href="#distribution" class="nav-item nav-item-olap" data-view="distribution">
+      <span class="nav-num">06</span>
+      <span class="nav-label">DISTRIBUTION</span>
+      <span class="nav-tag">OLAP</span>
+    </a>
     <div class="nav-spacer"></div>
     <a class="nav-ext" href="http://localhost:8123/play" target="_blank" rel="noopener">
       <span>CLICKHOUSE</span>
@@ -369,8 +374,7 @@
               <div class="pattern-name">Stuck at PLACED</div>
               <div class="pattern-desc">order placed, belum maju ke status apapun</div>
               <div class="pattern-val" data-pattern="stuck_at_placed">—</div>
-            </div>
-            <div class="pattern-row">
+            </div>            <div class="pattern-row">
               <div class="pattern-icon" data-color="danger"></div>
               <div class="pattern-name">Abandoned at PLACED</div>
               <div class="pattern-desc">placed lalu cancelled, tanpa pernah PAID</div>
@@ -394,6 +398,148 @@
               <div class="pattern-desc">PLACED → PAID → SHIPPED → DELIVERED berurutan</div>
               <div class="pattern-val" data-pattern="completed">—</div>
             </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ DISTRIBUTION VIEW (statistical patterns) ============ -->
+    <div id="distributionView" hidden>
+      <section class="dash-header">
+        <div class="dash-title">
+          <span class="dash-eyebrow">CLICKHOUSE · STATISTICAL DISTRIBUTIONS</span>
+          <h1 class="dash-h1">QUANTILES, LAG & APPROXIMATIONS</h1>
+          <p class="dash-sub">
+            Quantile bands per menit, period-over-period delta dengan lagInFrame,
+            top-K dengan topKWeighted, dan HyperLogLog cardinality — pattern statistik
+            yang khas ClickHouse.
+          </p>
+        </div>
+        <div class="dash-status">
+          <div class="dash-status-line">
+            <span class="ds-dot"></span>
+            <span class="ds-label">SOURCE</span>
+            <span class="ds-val">shop_analytics.orders FINAL</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">AUTO-REFRESH</span>
+            <span class="ds-val">3.0s</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">LAST TICK</span>
+            <span class="ds-val" id="distLastTick">--:--:--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- CARDINALITY TILES: exact vs HLL -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            <span class="ch-fn">uniqExact</span> vs <span class="ch-fn">uniqHLL12</span> —
+            HyperLogLog 12-bit, error rate ~0.81%, jauh lebih cepat di skala besar
+          </div>
+          <div class="tiles-head-right">
+            <span class="ds-label">SPEEDUP</span>
+            <span class="ds-val" id="cardSpeedup">— ×</span>
+          </div>
+        </div>
+        <div class="tile-grid tile-grid-4">
+          <div class="tile tile-orders">
+            <div class="tile-tag">UNIQ CUSTOMERS · exact</div>
+            <div class="tile-val" id="tile-card-exact-cust">—</div>
+            <div class="tile-foot" id="tile-card-exact-ms">— ms</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">UNIQ CUSTOMERS · HLL12</div>
+            <div class="tile-val" id="tile-card-hll-cust">—</div>
+            <div class="tile-foot" id="tile-card-hll-ms">— ms</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">UNIQ ORDERS · exact</div>
+            <div class="tile-val" id="tile-card-exact-ord">—</div>
+            <div class="tile-foot">via uniqExact</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">UNIQ ORDERS · HLL12</div>
+            <div class="tile-val" id="tile-card-hll-ord">—</div>
+            <div class="tile-foot" id="tile-card-error">err ~0.81%</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- QUANTILE BANDS CHART -->
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">QUANTILE BANDS · order value (60 menit)</h2>
+            <div class="card-sub">
+              <span class="ch-fn">quantile(0.5/0.95/0.99)</span> per minute bucket.
+              P95/P99 menunjukkan tail behavior — penting untuk SLO / anomaly detection.
+            </div>
+          </div>
+          <div class="card-meta">
+            <span class="ds-label">QUERY</span>
+            <span class="ds-val" id="quantilesElapsed">—</span>
+          </div>
+        </header>
+        <div class="chart-box chart-box-quantile" id="chartQuantiles"></div>
+      </section>
+
+      <!-- PERIOD-OVER-PERIOD TABLE + TOP-PER-BUCKET side by side -->
+      <section class="card-row">
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">PERIOD-OVER-PERIOD · last 20 menit</h2>
+              <div class="card-sub">
+                <span class="ch-fn">lagInFrame()</span> window function — bandingkan tiap menit dengan menit sebelumnya.
+              </div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="popElapsed">—</span>
+            </div>
+          </header>
+          <div class="dist-table-wrap">
+            <table class="dist-table" id="popTable">
+              <thead>
+                <tr>
+                  <th>MINUTE</th>
+                  <th class="num">ORDERS</th>
+                  <th class="num">Δ</th>
+                  <th class="num">REVENUE</th>
+                  <th class="num">% CHG</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">TOP-3 PRODUCTS · per menit</h2>
+              <div class="card-sub">
+                <span class="ch-fn">topKWeighted(3)(name, revenue)</span> — approximate top-K, satu fungsi.
+              </div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="topkElapsed">—</span>
+            </div>
+          </header>
+          <div class="dist-table-wrap">
+            <table class="dist-table" id="topkTable">
+              <thead>
+                <tr>
+                  <th>MINUTE</th>
+                  <th>TOP 3 (weighted by revenue)</th>
+                  <th class="num">ORDERS</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
         </div>
       </section>

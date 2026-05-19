@@ -263,6 +263,143 @@ public class MetricsController {
         return body;
     }
 
+    /**
+     * Quantile bands per menit — P50 / P95 / P99 order value.
+     * Showcase: quantile(0.5/0.95/0.99) per bucket — sub-second di jutaan row,
+     * vs Postgres percentile_cont yang lambat.
+     */
+    @GetMapping("/quantiles")
+    public Map<String, Object> quantiles(@RequestParam(defaultValue = "60") int minutes) {
+        int safe = clamp(minutes, 10, 360);
+        String sql = """
+            SELECT
+              toStartOfMinute(created_at)                  AS minute,
+              count()                                       AS orders,
+              round(quantile(0.5)(total_amount), 2)         AS p50,
+              round(quantile(0.95)(total_amount), 2)        AS p95,
+              round(quantile(0.99)(total_amount), 2)        AS p99,
+              round(max(total_amount), 2)                   AS max_amount
+            FROM shop_analytics.orders FINAL
+            WHERE is_deleted = 0
+              AND created_at >= now() - INTERVAL %d MINUTE
+            GROUP BY minute
+            ORDER BY minute ASC
+            """.formatted(safe);
+
+        long t0 = System.nanoTime();
+        List<Map<String, Object>> rows = ch.queryForList(sql);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        return response(rows, elapsedMs, sql);
+    }
+
+    /**
+     * Period-over-period — current minute vs previous, dengan % delta.
+     * Showcase: lagInFrame() window function.
+     */
+    @GetMapping("/period-over-period")
+    public Map<String, Object> periodOverPeriod(@RequestParam(defaultValue = "60") int minutes) {
+        int safe = clamp(minutes, 10, 360);
+        String sql = """
+            SELECT
+              minute,
+              orders,
+              round(revenue, 2)                                                   AS revenue,
+              lagInFrame(orders, 1, 0) OVER (ORDER BY minute)                     AS prev_orders,
+              round(lagInFrame(revenue, 1, 0) OVER (ORDER BY minute), 2)          AS prev_revenue,
+              orders - lagInFrame(orders, 1, 0) OVER (ORDER BY minute)            AS delta_orders,
+              round(revenue - lagInFrame(revenue, 1, 0) OVER (ORDER BY minute), 2) AS delta_revenue,
+              round((revenue - lagInFrame(revenue, 1, 0) OVER (ORDER BY minute))
+                    / nullIf(lagInFrame(revenue, 1, 0) OVER (ORDER BY minute), 0) * 100, 2) AS pct_change
+            FROM (
+              SELECT
+                toStartOfMinute(created_at) AS minute,
+                count()                     AS orders,
+                sum(total_amount)           AS revenue
+              FROM shop_analytics.orders FINAL
+              WHERE is_deleted = 0
+                AND created_at >= now() - INTERVAL %d MINUTE
+              GROUP BY minute
+            )
+            ORDER BY minute DESC
+            LIMIT 20
+            """.formatted(safe);
+
+        long t0 = System.nanoTime();
+        List<Map<String, Object>> rows = ch.queryForList(sql);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        return response(rows, elapsedMs, sql);
+    }
+
+    /**
+     * Top-3 produk per menit pakai topKWeighted (approximate algorithm).
+     * Showcase: topKWeighted(N)(key, weight) built-in — Postgres butuh window
+     * row_number() OVER PARTITION BY yang lebih lambat & verbose.
+     */
+    @GetMapping("/top-per-bucket")
+    public Map<String, Object> topPerBucket(@RequestParam(defaultValue = "15") int minutes) {
+        int safe = clamp(minutes, 5, 60);
+        String sql = """
+            SELECT
+              toStartOfMinute(o.created_at)                                  AS minute,
+              topKWeighted(3)(p.name, toUInt64(oi.quantity * oi.unit_price)) AS top3_products,
+              round(sum(oi.quantity * oi.unit_price), 2)                     AS minute_revenue,
+              count(DISTINCT o.id)                                           AS order_count
+            FROM shop_analytics.order_items AS oi FINAL
+            JOIN shop_analytics.orders     AS o  FINAL ON o.id = oi.order_id
+            JOIN shop_analytics.products   AS p  FINAL ON p.id = oi.product_id
+            WHERE oi.is_deleted = 0 AND o.is_deleted = 0 AND p.is_deleted = 0
+              AND o.created_at >= now() - INTERVAL %d MINUTE
+            GROUP BY minute
+            ORDER BY minute DESC
+            """.formatted(safe);
+
+        long t0 = System.nanoTime();
+        List<Map<String, Object>> rows = ch.queryForList(sql);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        return response(rows, elapsedMs, sql);
+    }
+
+    /**
+     * Cardinality comparison — uniqExact vs uniqHLL12 (HyperLogLog).
+     * Showcase: untuk juta-an row, HLL bisa 10–100× lebih cepat dengan
+     * error rate ~0.81% (HLL12 → 2^12 buckets). Run 2 query terpisah supaya
+     * elapsed time-nya bisa dibandingkan.
+     */
+    @GetMapping("/cardinality")
+    public Map<String, Object> cardinality() {
+        String exactSql = """
+            SELECT
+              uniqExact(customer_id) AS customers,
+              uniqExact(id)          AS orders
+            FROM shop_analytics.orders FINAL
+            WHERE is_deleted = 0
+            """;
+        String hllSql = """
+            SELECT
+              uniqHLL12(customer_id) AS customers,
+              uniqHLL12(id)          AS orders
+            FROM shop_analytics.orders FINAL
+            WHERE is_deleted = 0
+            """;
+
+        long t1 = System.nanoTime();
+        Map<String, Object> exact = ch.queryForMap(exactSql);
+        long exactMs = (System.nanoTime() - t1) / 1_000_000;
+
+        long t2 = System.nanoTime();
+        Map<String, Object> hll = ch.queryForMap(hllSql);
+        long hllMs = (System.nanoTime() - t2) / 1_000_000;
+
+        var data = new LinkedHashMap<String, Object>();
+        data.put("exact", exact);
+        data.put("hll", hll);
+        data.put("exactMs", exactMs);
+        data.put("hllMs", hllMs);
+        data.put("speedup", hllMs > 0 ? ((double) exactMs / hllMs) : 1.0);
+
+        return response(data, exactMs + hllMs, exactSql + ";\n\n" + hllSql);
+    }
+
     private Map<String, Object> response(Object data, long elapsedMs, String sql) {
         var body = new LinkedHashMap<String, Object>();
         body.put("data", data);

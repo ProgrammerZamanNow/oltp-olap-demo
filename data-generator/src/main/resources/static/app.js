@@ -262,7 +262,8 @@ function el(id) { return document.getElementById(id); }
 function setView(view) {
   const isStreaming = view === 'streaming';
   const isFunnel = view === 'funnel';
-  const isDashboard = isStreaming || isFunnel;
+  const isDistribution = view === 'distribution';
+  const isDashboard = isStreaming || isFunnel || isDistribution;
   const isInspector = !isDashboard && !!VIEWS[view];
   if (!isDashboard && !isInspector) view = 'customers';
 
@@ -277,14 +278,17 @@ function setView(view) {
   document.getElementById('inspectorView').hidden = isDashboard;
   document.getElementById('streamingView').hidden = !isStreaming;
   document.getElementById('funnelView').hidden = !isFunnel;
+  document.getElementById('distributionView').hidden = !isDistribution;
   document.body.classList.toggle('mode-streaming', isDashboard);
 
   // deactivate everything first, then activate the one we want
   streamingDeactivate();
   funnelDeactivate();
+  distributionDeactivate();
 
   if (isStreaming) streamingActivate();
   else if (isFunnel) funnelActivate();
+  else if (isDistribution) distributionActivate();
   else load({ animate: true });
 }
 
@@ -294,7 +298,9 @@ function scheduleAutoRefresh() {
   clearTimeout(autoRefreshTimer);
   autoRefreshTimer = setTimeout(async () => {
     await refreshAllCounts();
-    const inDashboard = state.view === 'streaming' || state.view === 'funnel';
+    const inDashboard = state.view === 'streaming'
+                     || state.view === 'funnel'
+                     || state.view === 'distribution';
     if (!inDashboard
         && state.page === 0
         && document.visibilityState === 'visible') {
@@ -1004,9 +1010,251 @@ function funnelDeactivate() {
   funnelState.timer = null;
 }
 
-/* Add keyboard shortcut "4" for streaming, "5" for funnel */
+/* Add keyboard shortcuts for dashboard tabs */
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === '4') location.hash = 'streaming';
   if (e.key === '5') location.hash = 'funnel';
+  if (e.key === '6') location.hash = 'distribution';
 });
+
+/* =================================================================== */
+/* DISTRIBUTION DASHBOARD — quantiles, lag, top-K, HLL                   */
+/* =================================================================== */
+
+const DIST_REFRESH_MS = 3000;
+const distCharts = { quantiles: null };
+const distState = {
+  active: false,
+  timer: null,
+  inFlight: 0,
+};
+
+function initDistCharts() {
+  if (typeof echarts === 'undefined') return;
+  if (!distCharts.quantiles) {
+    const el = document.getElementById('chartQuantiles');
+    if (el) distCharts.quantiles = echarts.init(el, null, { renderer: 'canvas' });
+  }
+  if (!window.__distResizeBound) {
+    window.addEventListener('resize', () => {
+      Object.values(distCharts).forEach(c => c && c.resize());
+    });
+    window.__distResizeBound = true;
+  }
+}
+
+function renderCardinalityTiles(card) {
+  const exact = card.exact || {};
+  const hll = card.hll || {};
+  const setTile = (id, val) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    if (node.textContent !== val) {
+      node.textContent = val;
+      flashTile(id);
+    }
+  };
+  setTile('tile-card-exact-cust', fmtCountShort(exact.customers));
+  setTile('tile-card-hll-cust',   fmtCountShort(hll.customers));
+  setTile('tile-card-exact-ord',  fmtCountShort(exact.orders));
+  setTile('tile-card-hll-ord',    fmtCountShort(hll.orders));
+  setText('tile-card-exact-ms', card.exactMs + ' ms');
+  setText('tile-card-hll-ms',   card.hllMs + ' ms');
+  const speedup = (card.speedup || 1).toFixed(1);
+  setText('cardSpeedup', speedup + '×');
+
+  // error vs exact (delta percent)
+  if (exact.customers && hll.customers) {
+    const e = Number(exact.customers);
+    const h = Number(hll.customers);
+    const errPct = e > 0 ? Math.abs(e - h) * 100 / e : 0;
+    setText('tile-card-error', 'err ' + errPct.toFixed(2) + '% · ~0.81% theoretical');
+  }
+}
+
+function renderQuantiles(rows, elapsedMs) {
+  if (!distCharts.quantiles) return;
+
+  const p50 = rows.map(r => [r.minute, Number(r.p50) || 0]);
+  const p95 = rows.map(r => [r.minute, Number(r.p95) || 0]);
+  const p99 = rows.map(r => [r.minute, Number(r.p99) || 0]);
+
+  const opt = baseChartOption();
+  opt.legend = {
+    data: ['p50', 'p95', 'p99'],
+    textStyle: { color: '#a4a4ad', fontSize: 10 },
+    right: 12, top: 0,
+    itemWidth: 14, itemHeight: 2,
+  };
+  opt.grid.top = 30;
+  opt.yAxis = {
+    type: 'value',
+    name: 'Rp',
+    nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+    axisLine: { show: false }, axisTick: { show: false },
+    axisLabel: {
+      color: '#6c6c78', fontSize: 10,
+      formatter: (v) => v >= 1_000_000 ? (v / 1_000_000).toFixed(0) + 'M' : (v / 1000).toFixed(0) + 'K',
+    },
+    splitLine: { lineStyle: { color: '#1a1a23', type: 'dashed' } },
+  };
+  opt.tooltip.formatter = (params) => {
+    if (!params.length) return '';
+    const ts = new Date(params[0].value[0]);
+    const pad = (n) => String(n).padStart(2, '0');
+    let html = `<div style="color:#fafafa;font-weight:700;margin-bottom:6px">`
+      + `${pad(ts.getHours())}:${pad(ts.getMinutes())}</div>`;
+    for (const p of params) {
+      html += `<div><span style="display:inline-block;width:8px;height:2px;background:${p.color};vertical-align:middle;margin-right:6px"></span>`
+        + `<span style="color:#a4a4ad">${p.seriesName}</span> · `
+        + `<span style="color:#fafafa">${fmtMoneyShort(p.value[1])}</span></div>`;
+    }
+    return html;
+  };
+  opt.series = [
+    {
+      name: 'p50', type: 'line', smooth: 0.25, symbol: 'none',
+      lineStyle: { color: '#6fbdff', width: 1.6 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(111, 189, 255, 0.18)' },
+          { offset: 1, color: 'rgba(111, 189, 255, 0)' },
+        ]),
+      },
+      data: p50,
+    },
+    {
+      name: 'p95', type: 'line', smooth: 0.25, symbol: 'none',
+      lineStyle: { color: '#ffb000', width: 1.6 },
+      data: p95,
+    },
+    {
+      name: 'p99', type: 'line', smooth: 0.25, symbol: 'none',
+      lineStyle: { color: '#ff6b6b', width: 1.8 },
+      data: p99,
+    },
+  ];
+  distCharts.quantiles.setOption(opt, { notMerge: true });
+  setText('quantilesElapsed', elapsedMs + ' ms');
+}
+
+function renderPeriodOverPeriod(rows, elapsedMs) {
+  const tbody = document.querySelector('#popTable tbody');
+  if (!tbody) return;
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#6c6c78;padding:24px">no data</td></tr>';
+    setText('popElapsed', elapsedMs + ' ms');
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, idx) => {
+    const delta = Number(r.delta_orders) || 0;
+    const pct = r.pct_change;
+    const pctNum = pct != null && pct !== '' ? Number(pct) : null;
+    const minute = new Date(r.minute);
+    const pad = (n) => String(n).padStart(2, '0');
+    const mLabel = `${pad(minute.getHours())}:${pad(minute.getMinutes())}`;
+    const deltaCls = delta > 0 ? 'delta-up' : delta < 0 ? 'delta-down' : 'delta-zero';
+    const deltaStr = (delta > 0 ? '+' : '') + delta;
+    let pctStr = '—';
+    let pctCls = 'delta-zero';
+    if (pctNum != null && isFinite(pctNum)) {
+      pctStr = (pctNum > 0 ? '+' : '') + pctNum.toFixed(1) + '%';
+      pctCls = pctNum > 0 ? 'delta-up' : pctNum < 0 ? 'delta-down' : 'delta-zero';
+    }
+    return `<tr style="animation-delay:${Math.min(idx * 6, 120)}ms">`
+      + `<td class="minute-col">${mLabel}</td>`
+      + `<td class="num">${fmtCountShort(r.orders)}</td>`
+      + `<td class="num ${deltaCls}">${deltaStr}</td>`
+      + `<td class="num">${fmtMoneyShort(r.revenue)}</td>`
+      + `<td class="num ${pctCls}">${pctStr}</td>`
+      + `</tr>`;
+  }).join('');
+  setText('popElapsed', elapsedMs + ' ms');
+}
+
+function renderTopK(rows, elapsedMs) {
+  const tbody = document.querySelector('#topkTable tbody');
+  if (!tbody) return;
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#6c6c78;padding:24px">no data</td></tr>';
+    setText('topkElapsed', elapsedMs + ' ms');
+    return;
+  }
+
+  tbody.innerHTML = rows.map((r, idx) => {
+    const minute = new Date(r.minute);
+    const pad = (n) => String(n).padStart(2, '0');
+    const mLabel = `${pad(minute.getHours())}:${pad(minute.getMinutes())}`;
+    // top3_products is an array (Java JDBC may return List or stringified)
+    let arr = r.top3_products;
+    if (typeof arr === 'string') {
+      // strip leading/trailing brackets and parse: "['a','b','c']" -> ['a','b','c']
+      try {
+        arr = arr.replace(/^\[|\]$/g, '').split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+      } catch { arr = []; }
+    }
+    if (!Array.isArray(arr)) arr = [];
+    const chips = arr.slice(0, 3).map((name, i) =>
+      `<span class="top3-chip"><span class="top3-chip-rank">#${i + 1}</span>${escapeHtml(name)}</span>`
+    ).join('');
+    return `<tr style="animation-delay:${Math.min(idx * 6, 120)}ms">`
+      + `<td class="minute-col">${mLabel}</td>`
+      + `<td><div class="top3-chips">${chips}</div></td>`
+      + `<td class="num">${fmtCountShort(r.order_count)}</td>`
+      + `</tr>`;
+  }).join('');
+  setText('topkElapsed', elapsedMs + ' ms');
+}
+
+async function distributionLoad() {
+  distState.inFlight++;
+  const token = distState.inFlight;
+  try {
+    const [c, q, p, t] = await Promise.all([
+      fetchMetric('/cardinality'),
+      fetchMetric('/quantiles', 'minutes=60'),
+      fetchMetric('/period-over-period', 'minutes=60'),
+      fetchMetric('/top-per-bucket', 'minutes=15'),
+    ]);
+    if (token !== distState.inFlight) return;
+
+    renderCardinalityTiles(c.data || {});
+    renderQuantiles(q.data || [], q.elapsedMs);
+    renderPeriodOverPeriod(p.data || [], p.elapsedMs);
+    renderTopK(t.data || [], t.elapsedMs);
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    setText('distLastTick',
+      `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`);
+  } catch (e) {
+    console.error('[distribution]', e);
+    setText('distLastTick', '⚠ ' + (e.message || 'error'));
+  }
+}
+
+function distributionActivate() {
+  distState.active = true;
+  initDistCharts();
+  requestAnimationFrame(() => {
+    Object.values(distCharts).forEach(c => c && c.resize());
+  });
+  distributionLoad();
+  clearTimeout(distState.timer);
+  const tick = () => {
+    if (!distState.active) return;
+    if (document.visibilityState === 'visible') distributionLoad();
+    distState.timer = setTimeout(tick, DIST_REFRESH_MS);
+  };
+  distState.timer = setTimeout(tick, DIST_REFRESH_MS);
+}
+
+function distributionDeactivate() {
+  distState.active = false;
+  clearTimeout(distState.timer);
+  distState.timer = null;
+}
