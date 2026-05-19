@@ -22,4 +22,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
         (SELECT * FROM orders WHERE status = 'SHIPPED' ORDER BY random() LIMIT :n)
         """, nativeQuery = true)
     java.util.List<Order> pickActiveStratified(int n);
+
+    @Query(value = "SELECT * FROM orders WHERE status = :status ORDER BY random() LIMIT :n", nativeQuery = true)
+    java.util.List<Order> pickByStatus(String status, int n);
+
+    @Query(value = "SELECT count(*) FROM orders WHERE status = :status", nativeQuery = true)
+    long countByStatus(String status);
 }

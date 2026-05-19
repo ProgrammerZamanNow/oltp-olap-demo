@@ -839,47 +839,81 @@
         </div>
       </section>
 
-      <!-- STATUS DISTRIBUTION -->
-      <section class="card">
-        <header class="card-head">
-          <div>
-            <h2 class="card-title">STATUS DISTRIBUTION · at selected time</h2>
-            <div class="card-sub">
-              Sebaran order berdasarkan status pada timestamp pilihan —
-              pakai <span class="ch-fn">countIf(status = ...)</span> di hasil snapshot.
+      <!-- STATUS + ACTIVE DISTRIBUTION side by side -->
+      <section class="card-row">
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">STATUS DISTRIBUTION · all states</h2>
+              <div class="card-sub">
+                Semua 5 status, share % relatif ke total order.
+                Terminal (DELIVERED / CANCELLED) accumulate seiring waktu.
+              </div>
+            </div>
+          </header>
+          <div class="status-bars" id="ttStatusBars">
+            <div class="status-bar-row" data-status="PLACED">
+              <div class="sb-label">PLACED</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
+            <div class="status-bar-row" data-status="PAID">
+              <div class="sb-label">PAID</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
+            <div class="status-bar-row" data-status="SHIPPED">
+              <div class="sb-label">SHIPPED</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
+            <div class="status-bar-row" data-status="DELIVERED">
+              <div class="sb-label">DELIVERED</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
+            <div class="status-bar-row" data-status="CANCELLED">
+              <div class="sb-label">CANCELLED</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
             </div>
           </div>
-        </header>
-        <div class="status-bars" id="ttStatusBars">
-          <div class="status-bar-row" data-status="PLACED">
-            <div class="sb-label">PLACED</div>
-            <div class="sb-track"><div class="sb-fill"></div></div>
-            <div class="sb-val">—</div>
-            <div class="sb-pct">—%</div>
-          </div>
-          <div class="status-bar-row" data-status="PAID">
-            <div class="sb-label">PAID</div>
-            <div class="sb-track"><div class="sb-fill"></div></div>
-            <div class="sb-val">—</div>
-            <div class="sb-pct">—%</div>
-          </div>
-          <div class="status-bar-row" data-status="SHIPPED">
-            <div class="sb-label">SHIPPED</div>
-            <div class="sb-track"><div class="sb-fill"></div></div>
-            <div class="sb-val">—</div>
-            <div class="sb-pct">—%</div>
-          </div>
-          <div class="status-bar-row" data-status="DELIVERED">
-            <div class="sb-label">DELIVERED</div>
-            <div class="sb-track"><div class="sb-fill"></div></div>
-            <div class="sb-val">—</div>
-            <div class="sb-pct">—%</div>
-          </div>
-          <div class="status-bar-row" data-status="CANCELLED">
-            <div class="sb-label">CANCELLED</div>
-            <div class="sb-track"><div class="sb-fill"></div></div>
-            <div class="sb-val">—</div>
-            <div class="sb-pct">—%</div>
+        </div>
+
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">ACTIVE DISTRIBUTION · in-flight only</h2>
+              <div class="card-sub">
+                Non-terminal saja (PLACED/PAID/SHIPPED). Share % relatif ke
+                <span class="ch-fn" id="ttActiveTotal">— in-flight</span>.
+              </div>
+            </div>
+          </header>
+          <div class="status-bars" id="ttActiveBars">
+            <div class="status-bar-row" data-status="PLACED">
+              <div class="sb-label">PLACED</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
+            <div class="status-bar-row" data-status="PAID">
+              <div class="sb-label">PAID</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
+            <div class="status-bar-row" data-status="SHIPPED">
+              <div class="sb-label">SHIPPED</div>
+              <div class="sb-track"><div class="sb-fill"></div></div>
+              <div class="sb-val">—</div>
+              <div class="sb-pct">—%</div>
+            </div>
           </div>
         </div>
       </section>

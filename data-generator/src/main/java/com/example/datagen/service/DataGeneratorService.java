@@ -26,7 +26,17 @@ public class DataGeneratorService {
 
     private static final Logger log = LoggerFactory.getLogger(DataGeneratorService.class);
     private static final List<String> NEXT_STATUSES = List.of("PAID", "SHIPPED", "DELIVERED", "CANCELLED");
-    private static final int ADVANCE_BATCH = 25;
+
+    // Proportional drain rate per tick — bukan fixed batch, supaya queue stabil di
+    // equilibrium (drain × queue = inflow). Equilibrium math:
+    //   PLACED:   inflow 5/tick   drain 8%  → eq ≈ 5 / 0.08   = 62
+    //   PAID:     inflow ≈ 4.5    drain 20% → eq ≈ 4.5 / 0.2  = 22
+    //   SHIPPED:  inflow ≈ 4.3    drain 30% → eq ≈ 4.3 / 0.3  = 14
+    //   DELIVERED accumulate ~4.2/tick = +126/min
+    // Hasilnya: ratio PLACED:PAID:SHIPPED ≈ 4.4 : 1.6 : 1 — realistis e-commerce.
+    private static final double DRAIN_PLACED  = 0.08;
+    private static final double DRAIN_PAID    = 0.20;
+    private static final double DRAIN_SHIPPED = 0.30;
 
     private final CustomerRepository customers;
     private final ProductRepository products;
@@ -123,16 +133,27 @@ public class DataGeneratorService {
     }
 
     /**
-     * Advance ADVANCE_BATCH order per tick mengikuti state machine:
-     *   PLACED  → PAID    (90%) / CANCELLED (10%)
-     *   PAID    → SHIPPED (95%) / CANCELLED (5%)
-     *   SHIPPED → DELIVERED (99%) / CANCELLED (1%)
-     * Supaya windowFunnel pattern PLACED→PAID→SHIPPED→DELIVERED kelihatan real.
+     * Advance per status dengan rate proporsional — meniru pipeline e-commerce
+     * nyata. Drain rate = % of current queue, jadi equilibrium tercapai.
+     * State machine transition:
+     *   PLACED  → PAID    (90%) / CANCELLED (10%)  [drain  8%/tick]
+     *   PAID    → SHIPPED (95%) / CANCELLED (5%)   [drain 20%/tick]
+     *   SHIPPED → DELIVERED (99%) / CANCELLED (1%) [drain 30%/tick]
      */
     private void advanceOrderStatusBatch() {
-        // Stratified: N dari tiap status (PLACED/PAID/SHIPPED) supaya funnel
-        // progress merata, tidak terjebak random pick yang dominan ke PLACED.
-        List<Order> batch = orders.pickActiveStratified(ADVANCE_BATCH);
+        advanceProportional("PLACED",  DRAIN_PLACED);
+        advanceProportional("PAID",    DRAIN_PAID);
+        advanceProportional("SHIPPED", DRAIN_SHIPPED);
+    }
+
+    private void advanceProportional(String status, double drainRate) {
+        long queueSize = orders.countByStatus(status);
+        if (queueSize == 0) return;
+        int n = Math.max(1, (int) Math.ceil(queueSize * drainRate));
+        advanceList(orders.pickByStatus(status, n));
+    }
+
+    private void advanceList(List<Order> batch) {
         for (Order order : batch) {
             String current = order.getStatus();
             String next = nextStatusFor(current);

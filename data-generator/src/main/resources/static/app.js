@@ -1662,23 +1662,15 @@ function renderTtTimestamp() {
   setText('ttHeaderTime', tsStr);
 }
 
-function renderStatusBars(stats) {
-  const total = Number(stats.total_orders) || 0;
-  const statusMap = {
-    PLACED:    Number(stats.placed) || 0,
-    PAID:      Number(stats.paid) || 0,
-    SHIPPED:   Number(stats.shipped) || 0,
-    DELIVERED: Number(stats.delivered) || 0,
-    CANCELLED: Number(stats.cancelled) || 0,
-  };
-  // find max for relative bar width
-  const maxCount = Math.max(...Object.values(statusMap), 1);
-
-  for (const [status, count] of Object.entries(statusMap)) {
-    const row = document.querySelector(`.status-bar-row[data-status="${status}"]`);
+function renderBarsInto(containerId, counts, denominator) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const maxCount = Math.max(...Object.values(counts), 1);
+  for (const [status, count] of Object.entries(counts)) {
+    const row = container.querySelector(`.status-bar-row[data-status="${status}"]`);
     if (!row) continue;
     const widthPct = (count / maxCount) * 100;
-    const sharePct = total > 0 ? (count * 100 / total) : 0;
+    const sharePct = denominator > 0 ? (count * 100 / denominator) : 0;
     const fill = row.querySelector('.sb-fill');
     const val = row.querySelector('.sb-val');
     const pct = row.querySelector('.sb-pct');
@@ -1686,6 +1678,28 @@ function renderStatusBars(stats) {
     if (val)  val.textContent = fmtCountShort(count);
     if (pct)  pct.textContent = sharePct.toFixed(1) + '%';
   }
+}
+
+function renderStatusBars(stats) {
+  const total = Number(stats.total_orders) || 0;
+  const all = {
+    PLACED:    Number(stats.placed) || 0,
+    PAID:      Number(stats.paid) || 0,
+    SHIPPED:   Number(stats.shipped) || 0,
+    DELIVERED: Number(stats.delivered) || 0,
+    CANCELLED: Number(stats.cancelled) || 0,
+  };
+  renderBarsInto('ttStatusBars', all, total);
+
+  // Active = non-terminal (PLACED/PAID/SHIPPED). % relatif ke total active.
+  const active = {
+    PLACED:  all.PLACED,
+    PAID:    all.PAID,
+    SHIPPED: all.SHIPPED,
+  };
+  const activeTotal = active.PLACED + active.PAID + active.SHIPPED;
+  renderBarsInto('ttActiveBars', active, activeTotal);
+  setText('ttActiveTotal', fmtCountShort(activeTotal) + ' in-flight');
 }
 
 function renderTtStats(stats) {
