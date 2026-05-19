@@ -261,7 +261,10 @@ function el(id) { return document.getElementById(id); }
 
 function setView(view) {
   const isStreaming = view === 'streaming';
-  if (!isStreaming && !VIEWS[view]) view = 'customers';
+  const isFunnel = view === 'funnel';
+  const isDashboard = isStreaming || isFunnel;
+  const isInspector = !isDashboard && !!VIEWS[view];
+  if (!isDashboard && !isInspector) view = 'customers';
 
   state.view = view;
   state.page = 0;
@@ -271,16 +274,18 @@ function setView(view) {
   });
 
   // toggle view containers + body mode class
-  document.getElementById('inspectorView').hidden = isStreaming;
+  document.getElementById('inspectorView').hidden = isDashboard;
   document.getElementById('streamingView').hidden = !isStreaming;
-  document.body.classList.toggle('mode-streaming', isStreaming);
+  document.getElementById('funnelView').hidden = !isFunnel;
+  document.body.classList.toggle('mode-streaming', isDashboard);
 
-  if (isStreaming) {
-    streamingActivate();
-  } else {
-    streamingDeactivate();
-    load({ animate: true });
-  }
+  // deactivate everything first, then activate the one we want
+  streamingDeactivate();
+  funnelDeactivate();
+
+  if (isStreaming) streamingActivate();
+  else if (isFunnel) funnelActivate();
+  else load({ animate: true });
 }
 
 /* ---------------- Auto-refresh ---------------- */
@@ -289,7 +294,8 @@ function scheduleAutoRefresh() {
   clearTimeout(autoRefreshTimer);
   autoRefreshTimer = setTimeout(async () => {
     await refreshAllCounts();
-    if (state.view !== 'streaming'
+    const inDashboard = state.view === 'streaming' || state.view === 'funnel';
+    if (!inDashboard
         && state.page === 0
         && document.visibilityState === 'visible') {
       await load({ animate: false });
@@ -732,4 +738,275 @@ document.addEventListener('DOMContentLoaded', () => {
       if (streamState.active) streamingLoad();
     });
   }
+});
+
+/* =================================================================== */
+/* FUNNEL DASHBOARD — event sequence patterns                            */
+/* =================================================================== */
+
+const FUNNEL_REFRESH_MS = 5000;
+const funnelCharts = { funnel: null, histogram: null };
+const funnelState = {
+  active: false,
+  timer: null,
+  inFlight: 0,
+  prev: { stats: {} },
+};
+
+const STAGE_COLORS = {
+  PLACED:    '#9aa3b2',
+  PAID:      '#ffb000',
+  SHIPPED:   '#6fbdff',
+  DELIVERED: '#5ee99d',
+};
+
+function initFunnelCharts() {
+  if (typeof echarts === 'undefined') return;
+  ['Funnel', 'Histogram'].forEach(name => {
+    const id = 'chart' + name;
+    const key = name.toLowerCase();
+    if (funnelCharts[key]) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    funnelCharts[key] = echarts.init(el, null, { renderer: 'canvas' });
+  });
+  if (!window.__funnelResizeBound) {
+    window.addEventListener('resize', () => {
+      Object.values(funnelCharts).forEach(c => c && c.resize());
+    });
+    window.__funnelResizeBound = true;
+  }
+}
+
+function renderFunnel(stages, stats) {
+  if (!funnelCharts.funnel) return;
+
+  // ECharts funnel needs descending sort preserved by sort: 'none'
+  const data = stages.map(s => ({
+    value: Number(s.reached) || 0,
+    name: s.stage,
+    itemStyle: { color: STAGE_COLORS[s.stage] || '#888', borderColor: 'transparent' },
+  }));
+
+  const total = Number(stats.total_orders) || 1;
+
+  const opt = {
+    backgroundColor: 'transparent',
+    textStyle: { fontFamily: 'JetBrains Mono', fontSize: 11, color: '#a4a4ad' },
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: '#0e0e13',
+      borderColor: '#3d3d4e',
+      textStyle: { color: '#fafafa', fontFamily: 'JetBrains Mono', fontSize: 11 },
+      formatter: (p) => {
+        const reached = p.value;
+        const stage = stages[p.dataIndex];
+        const prevReached = p.dataIndex > 0 ? Number(stages[p.dataIndex - 1].reached) : reached;
+        const dropOff = prevReached - reached;
+        const dropPct = prevReached > 0 ? (dropOff * 100 / prevReached).toFixed(1) : '0';
+        const overallPct = total > 0 ? (reached * 100 / total).toFixed(1) : '0';
+        return `<div style="color:#fafafa;font-weight:700;margin-bottom:6px">${p.name}</div>`
+          + `<div><span style="color:#a4a4ad">Reached</span> · <span style="color:#fafafa;font-weight:700">${fmtCountShort(reached)}</span></div>`
+          + `<div><span style="color:#a4a4ad">% of total</span> · <span style="color:#fafafa">${overallPct}%</span></div>`
+          + (p.dataIndex > 0
+              ? `<div><span style="color:#a4a4ad">Drop-off from prev</span> · <span style="color:#ff6b6b">${fmtCountShort(dropOff)} (-${dropPct}%)</span></div>`
+              : '');
+      },
+    },
+    series: [{
+      type: 'funnel',
+      sort: 'none',
+      orient: 'horizontal',
+      funnelAlign: 'center',
+      left: '5%',
+      right: '5%',
+      top: 20,
+      bottom: 20,
+      gap: 4,
+      minSize: '20%',
+      label: {
+        show: true,
+        position: 'inside',
+        color: '#0a0a0b',
+        fontWeight: 700,
+        fontFamily: 'JetBrains Mono',
+        fontSize: 12,
+        formatter: (p) => {
+          const overallPct = total > 0 ? (p.value * 100 / total).toFixed(0) : '0';
+          return `${p.name}\n${fmtCountShort(p.value)} · ${overallPct}%`;
+        },
+      },
+      labelLine: { show: false },
+      data,
+    }],
+  };
+  funnelCharts.funnel.setOption(opt, { notMerge: true });
+}
+
+function renderHistogram(rows) {
+  if (!funnelCharts.histogram) return;
+
+  if (!rows || rows.length === 0) {
+    funnelCharts.histogram.setOption({
+      backgroundColor: 'transparent',
+      title: {
+        text: 'NO DATA · belum ada order PLACED → DELIVERED',
+        textStyle: { color: '#6c6c78', fontFamily: 'JetBrains Mono', fontSize: 11, fontWeight: 600 },
+        left: 'center', top: 'middle',
+      },
+      series: [],
+    }, { notMerge: true });
+    return;
+  }
+
+  const data = rows.map(r => {
+    const lower = Number(r.lower) || 0;
+    const upper = Number(r.upper) || 0;
+    const freq = Number(r.frequency) || 0;
+    return {
+      value: [(lower + upper) / 2, freq],
+      lower, upper, freq,
+    };
+  });
+
+  const opt = {
+    backgroundColor: 'transparent',
+    textStyle: { fontFamily: 'JetBrains Mono', fontSize: 11, color: '#a4a4ad' },
+    animation: false,
+    grid: { left: 50, right: 24, top: 14, bottom: 36, containLabel: true },
+    xAxis: {
+      type: 'value',
+      name: 'detik',
+      nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+      nameGap: 22, nameLocation: 'middle',
+      axisLine: { lineStyle: { color: '#2a2a36' } },
+      axisLabel: { color: '#6c6c78', fontSize: 10 },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      name: 'orders',
+      nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#6c6c78', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#1a1a23', type: 'dashed' } },
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#0e0e13',
+      borderColor: '#3d3d4e',
+      textStyle: { color: '#fafafa', fontFamily: 'JetBrains Mono', fontSize: 11 },
+      formatter: (params) => {
+        const d = params[0].data;
+        return `<div style="color:#fafafa;font-weight:700;margin-bottom:4px">`
+          + `${d.lower.toFixed(1)}s – ${d.upper.toFixed(1)}s</div>`
+          + `<div><span style="color:#a4a4ad">orders</span> · <span style="color:#fafafa;font-weight:700">${fmtCountShort(d.freq)}</span></div>`;
+      },
+    },
+    series: [{
+      type: 'bar',
+      barWidth: '85%',
+      itemStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: '#ff7ad9' },
+          { offset: 1, color: 'rgba(255, 122, 217, 0.4)' },
+        ]),
+      },
+      data,
+    }],
+  };
+  funnelCharts.histogram.setOption(opt, { notMerge: true });
+}
+
+function renderFunnelTiles(stats) {
+  const map = {
+    'tile-total':     fmtCountShort(stats.total_orders),
+    'tile-completed': fmtCountShort(stats.completed),
+    'tile-conv-pct':  (Number(stats.conversion_pct) || 0).toFixed(1) + '%',
+    'tile-cancelled': fmtCountShort(stats.ever_cancelled),
+  };
+  for (const [id, val] of Object.entries(map)) {
+    const node = document.getElementById(id);
+    if (!node) continue;
+    if (node.textContent !== val) {
+      node.textContent = val;
+      flashTile(id);
+    }
+  }
+}
+
+function renderPatternTable(stats) {
+  const fields = ['stuck_at_placed', 'abandoned_at_placed', 'cancelled_after_paid',
+                  'shipped_without_paid', 'completed'];
+  for (const f of fields) {
+    const node = document.querySelector(`[data-pattern="${f}"]`);
+    if (!node) continue;
+    const val = fmtCountShort(stats[f] || 0);
+    if (node.textContent !== val) {
+      node.textContent = val;
+      node.classList.remove('flash');
+      void node.offsetWidth;
+      node.classList.add('flash');
+    }
+  }
+}
+
+async function funnelLoad() {
+  funnelState.inFlight++;
+  const token = funnelState.inFlight;
+  try {
+    const [f, h] = await Promise.all([
+      fetchMetric('/funnel'),
+      fetchMetric('/conversion-histogram', 'bins=20'),
+    ]);
+    if (token !== funnelState.inFlight) return;
+
+    const stages = f.data.stages || [];
+    const stats = f.data.stats || {};
+
+    renderFunnelTiles(stats);
+    renderFunnel(stages, stats);
+    renderPatternTable(stats);
+    renderHistogram(h.data || []);
+
+    setText('funnelElapsed', f.elapsedMs + ' ms');
+    setText('histogramElapsed', h.elapsedMs + ' ms');
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    setText('funnelLastTick',
+      `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`);
+  } catch (e) {
+    console.error('[funnel]', e);
+    setText('funnelLastTick', '⚠ ' + (e.message || 'error'));
+  }
+}
+
+function funnelActivate() {
+  funnelState.active = true;
+  initFunnelCharts();
+  requestAnimationFrame(() => {
+    Object.values(funnelCharts).forEach(c => c && c.resize());
+  });
+  funnelLoad();
+  clearTimeout(funnelState.timer);
+  const tick = () => {
+    if (!funnelState.active) return;
+    if (document.visibilityState === 'visible') funnelLoad();
+    funnelState.timer = setTimeout(tick, FUNNEL_REFRESH_MS);
+  };
+  funnelState.timer = setTimeout(tick, FUNNEL_REFRESH_MS);
+}
+
+function funnelDeactivate() {
+  funnelState.active = false;
+  clearTimeout(funnelState.timer);
+  funnelState.timer = null;
+}
+
+/* Add keyboard shortcut "4" for streaming, "5" for funnel */
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === '4') location.hash = 'streaming';
+  if (e.key === '5') location.hash = 'funnel';
 });

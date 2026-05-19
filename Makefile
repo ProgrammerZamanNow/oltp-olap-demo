@@ -9,7 +9,7 @@ down:
 	$(COMPOSE) down
 
 rebuild:
-	$(COMPOSE) up -d --build generator
+	$(COMPOSE) up -d --no-deps --force-recreate --build generator
 
 clean:
 	$(COMPOSE) down -v

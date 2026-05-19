@@ -32,6 +32,7 @@ generator     (OLTP)       baca WAL via pgoutput       shop.public.*   Kafka eng
 | `time.precision.mode=connect` | TIDAK menghasilkan Int64 millis seperti dugaan awal — dengan `JsonConverter` schemaless tetap di-serialize sebagai **ISO 8601 string**. Karena itu Kafka engine table di ClickHouse pakai `String` + `parseDateTime64BestEffortOrZero(..., 3)`. |
 | `ReplacingMergeTree(updated_at)` | Versi terbaru per PK menang setelah background merge. Query ad-hoc pakai `FINAL` untuk dedup at query-time. |
 | Soft delete via `is_deleted` UInt8 | Bukan DELETE FROM. Filter `WHERE is_deleted = 0` saat query. Konsisten dengan event-based CDC. |
+| Dua MV per `kafka_orders` → `orders` (ReplacingMergeTree, current state) + `orders_events` (MergeTree, full history) | `windowFunnel` butuh history event status. ReplacingMergeTree dedupe per `(created_at, id)` jadi history hilang setelah merge. Tabel `orders_events` ORDER BY `(id, updated_at)` jadi tiap event row unik, tidak ke-dedup. ClickHouse fanout: dua MV pada Kafka engine yang sama tetap dapat semua event. |
 | Sintaks `FINAL` di ClickHouse | Harus **setelah alias**: `FROM tbl AS x FINAL`, BUKAN `FROM tbl FINAL AS x`. |
 | Port Postgres host = `15432` (bukan 5432 / 5433) | User punya Postgres lokal di 5432, dan port dev umum lain (5433) juga sering dipakai. Pakai 15432 yang very uncommon untuk hindari bentrok. Container internal tetap 5432. Generator's `application.yml` connect ke `jdbc:postgresql://localhost:15432/shop`. Service compose pakai DNS internal `postgres:5432` via env `SPRING_DATASOURCE_URL`. |
 | Tidak ada volume Kafka di compose | Sengaja — restart `down` akan wipe topic & connector configs. Demo ulang dari snapshot lebih bersih. (Untuk production: tambahkan volume.) |
@@ -58,6 +59,14 @@ make generator-logs
 # Inspect data OLTP via REST API generator (port 8080)
 curl -s http://localhost:8080/api/orders | jq
 # query params: ?page=0&size=100&sort=createdAt,desc — default size=100, sort=createdAt DESC
+
+# Time-series metrics endpoints (ClickHouse-backed)
+curl -s http://localhost:8080/api/metrics/windows           # 8 metric single-pass
+curl -s "http://localhost:8080/api/metrics/throughput?withFill=true&minutes=60"
+curl -s "http://localhost:8080/api/metrics/velocity?minutes=30"
+curl -s "http://localhost:8080/api/metrics/anomaly?minutes=60"
+curl -s http://localhost:8080/api/metrics/funnel            # windowFunnel + stats
+curl -s "http://localhost:8080/api/metrics/conversion-histogram?bins=20"
 
 # Atau rebuild kalau code generator berubah
 make rebuild

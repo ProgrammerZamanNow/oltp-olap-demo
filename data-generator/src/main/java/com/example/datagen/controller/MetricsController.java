@@ -157,6 +157,112 @@ public class MetricsController {
         return response(rows, elapsedMs, sql);
     }
 
+    /**
+     * Funnel analysis PLACED → PAID → SHIPPED → DELIVERED dalam satu query.
+     * Showcase: windowFunnel(N) — di Postgres butuh self-join berlapis.
+     * Sekaligus return stats agregat: cancelled, abandoned, completed, dst.
+     */
+    @GetMapping("/funnel")
+    public Map<String, Object> funnel() {
+        // 1) Per-order funnel level + flag, dipakai untuk stats DAN bars
+        String perOrderCte = """
+            WITH per_order AS (
+              SELECT
+                id,
+                windowFunnel(3600)(toDateTime(updated_at),
+                  status = 'PLACED',
+                  status = 'PAID',
+                  status = 'SHIPPED',
+                  status = 'DELIVERED'
+                ) AS funnel_level,
+                maxIf(1, status = 'CANCELLED') AS was_cancelled,
+                countIf(status = 'PAID')       AS paid_count
+              FROM shop_analytics.orders_events
+              WHERE is_deleted = 0
+              GROUP BY id
+            )
+            """;
+
+        String stagesSql = perOrderCte + """
+            SELECT stage, pos, reached
+            FROM (
+              SELECT 'PLACED'    AS stage, 1 AS pos, countIf(funnel_level >= 1) AS reached FROM per_order
+              UNION ALL
+              SELECT 'PAID',     2,                  countIf(funnel_level >= 2)             FROM per_order
+              UNION ALL
+              SELECT 'SHIPPED',  3,                  countIf(funnel_level >= 3)             FROM per_order
+              UNION ALL
+              SELECT 'DELIVERED',4,                  countIf(funnel_level = 4)              FROM per_order
+            )
+            ORDER BY pos
+            """;
+
+        String statsSql = perOrderCte + """
+            SELECT
+              count()                                              AS total_orders,
+              countIf(funnel_level = 4)                            AS completed,
+              countIf(was_cancelled = 1)                           AS ever_cancelled,
+              countIf(funnel_level = 1 AND was_cancelled = 1)      AS abandoned_at_placed,
+              countIf(funnel_level >= 2 AND was_cancelled = 1)     AS cancelled_after_paid,
+              countIf(funnel_level >= 3 AND paid_count = 0)        AS shipped_without_paid,
+              countIf(funnel_level = 1 AND was_cancelled = 0)      AS stuck_at_placed,
+              round(countIf(funnel_level = 4) * 100.0
+                    / nullIf(countIf(funnel_level >= 1), 0), 2)    AS conversion_pct
+            FROM per_order
+            """;
+
+        long t0 = System.nanoTime();
+        List<Map<String, Object>> stages = ch.queryForList(stagesSql);
+        Map<String, Object> stats = ch.queryForMap(statsSql);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+
+        var data = new LinkedHashMap<String, Object>();
+        data.put("stages", stages);
+        data.put("stats", stats);
+
+        var body = response(data, elapsedMs, stagesSql + ";\n\n" + statsSql);
+        return body;
+    }
+
+    /**
+     * Time-to-conversion histogram — distribusi durasi PLACED → DELIVERED.
+     * Showcase: histogram(N) built-in auto-binning — Postgres butuh width_bucket manual.
+     */
+    @GetMapping("/conversion-histogram")
+    public Map<String, Object> conversionHistogram(@RequestParam(defaultValue = "20") int bins) {
+        int safe = clamp(bins, 5, 60);
+        String sql = """
+            SELECT
+              bin.1 AS lower,
+              bin.2 AS upper,
+              bin.3 AS frequency
+            FROM (
+              SELECT arrayJoin(histogram(%d)(toFloat64(seconds_to_delivered))) AS bin
+              FROM (
+                SELECT
+                  id,
+                  minIf(updated_at, status = 'PLACED')    AS placed_at,
+                  minIf(updated_at, status = 'DELIVERED') AS delivered_at,
+                  dateDiff('second', placed_at, delivered_at) AS seconds_to_delivered
+                FROM shop_analytics.orders_events
+                WHERE is_deleted = 0
+                GROUP BY id
+                HAVING toUnixTimestamp(placed_at) > 0
+                   AND toUnixTimestamp(delivered_at) > 0
+                   AND delivered_at > placed_at
+              )
+            )
+            ORDER BY lower
+            """.formatted(safe);
+
+        long t0 = System.nanoTime();
+        List<Map<String, Object>> rows = ch.queryForList(sql);
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        var body = response(rows, elapsedMs, sql);
+        body.put("bins", safe);
+        return body;
+    }
+
     private Map<String, Object> response(Object data, long elapsedMs, String sql) {
         var body = new LinkedHashMap<String, Object>();
         body.put("data", data);

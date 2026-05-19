@@ -138,6 +138,26 @@ ENGINE = ReplacingMergeTree
 ORDER BY (order_id, id);
 
 -- =====================================================================
+-- Order events history: SEMUA versi status disimpan (tanpa dedup).
+-- ReplacingMergeTree di tabel `orders` dedupe per (created_at, id) jadi
+-- history status hilang setelah merge — tidak cocok untuk windowFunnel.
+-- Tabel ini ORDER BY (id, updated_at) supaya tiap event row unik.
+-- =====================================================================
+
+CREATE TABLE shop_analytics.orders_events
+(
+    id           Int64,
+    customer_id  Int64,
+    status       String,
+    total_amount Decimal(14, 2),
+    created_at   DateTime64(3),
+    updated_at   DateTime64(3),
+    is_deleted   UInt8
+)
+ENGINE = MergeTree
+ORDER BY (id, updated_at);
+
+-- =====================================================================
 -- Materialized views move messages from Kafka tables to target tables.
 -- =====================================================================
 
@@ -184,3 +204,17 @@ SELECT
     toDecimal64(unit_price, 2)  AS unit_price,
     toUInt8(__deleted = 'true') AS is_deleted
 FROM shop_analytics.kafka_order_items;
+
+-- MV kedua yang membaca kafka_orders dan mengisi orders_events (full history).
+-- Dua MV pada Kafka engine yang sama → ClickHouse fanout, masing-masing dapat
+-- semua event. Cocok untuk pattern "current state + event history sekaligus".
+CREATE MATERIALIZED VIEW shop_analytics.mv_orders_events TO shop_analytics.orders_events AS
+SELECT
+    id,
+    customer_id,
+    status,
+    toDecimal64(total_amount, 2)                  AS total_amount,
+    parseDateTime64BestEffortOrZero(created_at, 3) AS created_at,
+    parseDateTime64BestEffortOrZero(updated_at, 3) AS updated_at,
+    toUInt8(__deleted = 'true')                   AS is_deleted
+FROM shop_analytics.kafka_orders;

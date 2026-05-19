@@ -865,6 +865,8 @@ body.mode-streaming .statusbar { justify-content: flex-end; }
   gap: 12px;
 }
 
+.tile-grid-4 { grid-template-columns: repeat(4, 1fr); }
+
 .tile {
   position: relative;
   padding: 16px 18px 18px;
@@ -1026,6 +1028,88 @@ body.mode-streaming .statusbar { justify-content: flex-end; }
 }
 
 .toggle input:checked ~ .toggle-label { color: var(--accent-bright); }
+
+/* =================================================================== */
+/* FUNNEL VIEW — pattern table, funnel chart                             */
+/* =================================================================== */
+
+.chart-box-funnel { height: 340px; }
+
+/* pattern showcase: each row = a derived sequence pattern + count */
+.pattern-table {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.pattern-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  grid-template-areas:
+    "icon name  val"
+    "icon desc  val";
+  gap: 2px 12px;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s ease;
+}
+
+.pattern-row:last-child { border-bottom: none; }
+.pattern-row:hover { background: var(--bg-hover); }
+
+.pattern-icon {
+  grid-area: icon;
+  width: 10px;
+  height: 10px;
+  align-self: center;
+  background: var(--fg-mute);
+  box-shadow: 0 0 8px transparent;
+}
+
+.pattern-icon[data-color="amber"]   { background: var(--accent);  box-shadow: 0 0 8px var(--accent-glow); }
+.pattern-icon[data-color="success"] { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.pattern-icon[data-color="warn"]    { background: var(--warn); }
+.pattern-icon[data-color="danger"]  { background: var(--danger); }
+.pattern-icon[data-color="magenta"] { background: var(--magenta); box-shadow: 0 0 8px rgba(255, 122, 217, 0.5); }
+
+.pattern-name {
+  grid-area: name;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-bright);
+  letter-spacing: 0.04em;
+}
+
+.pattern-desc {
+  grid-area: desc;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.pattern-val {
+  grid-area: val;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--fg-bright);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.2s ease;
+}
+
+.pattern-row:hover .pattern-val { color: var(--accent-bright); }
+
+.pattern-val.flash {
+  animation: tile-flash 0.45s ease;
+}
+
+code {
+  font-family: var(--font-mono);
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  padding: 1px 5px;
+  font-size: 10px;
+  color: var(--fg);
+}
 
 /* =================================================================== */
 /* RESPONSIVE                                                            */

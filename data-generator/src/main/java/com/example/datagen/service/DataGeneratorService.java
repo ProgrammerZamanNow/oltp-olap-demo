@@ -26,6 +26,7 @@ public class DataGeneratorService {
 
     private static final Logger log = LoggerFactory.getLogger(DataGeneratorService.class);
     private static final List<String> NEXT_STATUSES = List.of("PAID", "SHIPPED", "DELIVERED", "CANCELLED");
+    private static final int ADVANCE_BATCH = 25;
 
     private final CustomerRepository customers;
     private final ProductRepository products;
@@ -62,9 +63,10 @@ public class DataGeneratorService {
             for (int i = 0; i < orderPerTick; i++) {
                 createOrder();
             }
-            if (ThreadLocalRandom.current().nextDouble() < statusUpdateRate) {
-                advanceOrderStatus();
-            }
+            // Advance multiple orders per tick mengikuti state machine realistis
+            // supaya funnel windowFunnel mendapat data PLACED→PAID→SHIPPED→DELIVERED.
+            // Tidak pakai probability gate — pipeline progress yang konsisten.
+            advanceOrderStatusBatch();
         } catch (Exception e) {
             log.error("tick failed", e);
         }
@@ -118,5 +120,36 @@ public class DataGeneratorService {
             orders.save(order);
             log.info("order id={} -> {}", order.getId(), next);
         });
+    }
+
+    /**
+     * Advance ADVANCE_BATCH order per tick mengikuti state machine:
+     *   PLACED  → PAID    (90%) / CANCELLED (10%)
+     *   PAID    → SHIPPED (95%) / CANCELLED (5%)
+     *   SHIPPED → DELIVERED (99%) / CANCELLED (1%)
+     * Supaya windowFunnel pattern PLACED→PAID→SHIPPED→DELIVERED kelihatan real.
+     */
+    private void advanceOrderStatusBatch() {
+        // Stratified: N dari tiap status (PLACED/PAID/SHIPPED) supaya funnel
+        // progress merata, tidak terjebak random pick yang dominan ke PLACED.
+        List<Order> batch = orders.pickActiveStratified(ADVANCE_BATCH);
+        for (Order order : batch) {
+            String current = order.getStatus();
+            String next = nextStatusFor(current);
+            if (next == null) continue;
+            order.setStatus(next);
+            orders.save(order);
+            log.info("order id={} {} -> {}", order.getId(), current, next);
+        }
+    }
+
+    private String nextStatusFor(String current) {
+        double r = ThreadLocalRandom.current().nextDouble();
+        return switch (current) {
+            case "PLACED"  -> r < 0.90 ? "PAID"      : "CANCELLED";
+            case "PAID"    -> r < 0.95 ? "SHIPPED"   : "CANCELLED";
+            case "SHIPPED" -> r < 0.99 ? "DELIVERED" : "CANCELLED";
+            default -> null;
+        };
     }
 }

@@ -63,6 +63,11 @@
       <span class="nav-label">STREAMING</span>
       <span class="nav-tag">OLAP</span>
     </a>
+    <a href="#funnel" class="nav-item nav-item-olap" data-view="funnel">
+      <span class="nav-num">05</span>
+      <span class="nav-label">FUNNEL</span>
+      <span class="nav-tag">OLAP</span>
+    </a>
     <div class="nav-spacer"></div>
     <a class="nav-ext" href="http://localhost:8123/play" target="_blank" rel="noopener">
       <span>CLICKHOUSE</span>
@@ -252,6 +257,144 @@
             </div>
           </header>
           <div class="chart-box" id="chartAnomaly"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ FUNNEL VIEW (event sequence patterns) ============ -->
+    <div id="funnelView" hidden>
+      <section class="dash-header">
+        <div class="dash-title">
+          <span class="dash-eyebrow">CLICKHOUSE · EVENT SEQUENCES</span>
+          <h1 class="dash-h1">FUNNEL & SEQUENCE PATTERNS</h1>
+          <p class="dash-sub">
+            windowFunnel mendeteksi urutan event yang harus terjadi berturut-turut.
+            Drop-off antar tahap, durasi konversi, dan pola anomali — semuanya
+            dalam satu pemindaian tabel.
+          </p>
+        </div>
+        <div class="dash-status">
+          <div class="dash-status-line">
+            <span class="ds-dot"></span>
+            <span class="ds-label">SOURCE</span>
+            <span class="ds-val">shop_analytics.orders (all versions)</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">AUTO-REFRESH</span>
+            <span class="ds-val">5.0s</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">LAST TICK</span>
+            <span class="ds-val" id="funnelLastTick">--:--:--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- STATS ROW: 4 tiles derived from windowFunnel -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            <span class="ch-fn">windowFunnel(3600)</span> · level-based stats (1 query untuk semua)
+          </div>
+          <div class="tiles-head-right">
+            <span class="ds-label">QUERY</span>
+            <span class="ds-val" id="funnelElapsed">—</span>
+          </div>
+        </div>
+        <div class="tile-grid tile-grid-4">
+          <div class="tile tile-orders">
+            <div class="tile-tag">TOTAL ORDERS</div>
+            <div class="tile-val" id="tile-total">—</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">COMPLETED · level = 4</div>
+            <div class="tile-val" id="tile-completed">—</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">CONVERSION %</div>
+            <div class="tile-val" id="tile-conv-pct">—</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">EVER CANCELLED</div>
+            <div class="tile-val" id="tile-cancelled">—</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FUNNEL CHART -->
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">FUNNEL · PLACED → PAID → SHIPPED → DELIVERED</h2>
+            <div class="card-sub">
+              <span class="ch-fn">windowFunnel</span> mencari rantai event yang berurutan
+              (gap diperbolehkan, urutan tidak). Level 4 = sampai DELIVERED dengan urutan utuh.
+            </div>
+          </div>
+        </header>
+        <div class="chart-box chart-box-funnel" id="chartFunnel"></div>
+      </section>
+
+      <!-- HISTOGRAM + PATTERN CARDS side by side -->
+      <section class="card-row">
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">TIME-TO-CONVERSION · histogram</h2>
+              <div class="card-sub">
+                <span class="ch-fn">histogram(20)</span> auto-binning durasi
+                PLACED → DELIVERED (detik). Postgres butuh <code>width_bucket</code> manual.
+              </div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="histogramElapsed">—</span>
+            </div>
+          </header>
+          <div class="chart-box" id="chartHistogram"></div>
+        </div>
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">SEQUENCE PATTERN BREAKDOWN</h2>
+              <div class="card-sub">
+                Pola yang bisa dideteksi dari kombinasi <span class="ch-fn">funnel_level</span>
+                + flag <span class="ch-fn">countIf</span>.
+              </div>
+            </div>
+          </header>
+          <div class="pattern-table" id="patternTable">
+            <div class="pattern-row">
+              <div class="pattern-icon" data-color="amber"></div>
+              <div class="pattern-name">Stuck at PLACED</div>
+              <div class="pattern-desc">order placed, belum maju ke status apapun</div>
+              <div class="pattern-val" data-pattern="stuck_at_placed">—</div>
+            </div>
+            <div class="pattern-row">
+              <div class="pattern-icon" data-color="danger"></div>
+              <div class="pattern-name">Abandoned at PLACED</div>
+              <div class="pattern-desc">placed lalu cancelled, tanpa pernah PAID</div>
+              <div class="pattern-val" data-pattern="abandoned_at_placed">—</div>
+            </div>
+            <div class="pattern-row">
+              <div class="pattern-icon" data-color="warn"></div>
+              <div class="pattern-name">Cancelled after PAID</div>
+              <div class="pattern-desc">sudah bayar tapi tetap dibatalkan — chargeback-style</div>
+              <div class="pattern-val" data-pattern="cancelled_after_paid">—</div>
+            </div>
+            <div class="pattern-row">
+              <div class="pattern-icon" data-color="magenta"></div>
+              <div class="pattern-name">Shipped without PAID</div>
+              <div class="pattern-desc">jumped past PAID — data anomaly</div>
+              <div class="pattern-val" data-pattern="shipped_without_paid">—</div>
+            </div>
+            <div class="pattern-row">
+              <div class="pattern-icon" data-color="success"></div>
+              <div class="pattern-name">Full journey (level = 4)</div>
+              <div class="pattern-desc">PLACED → PAID → SHIPPED → DELIVERED berurutan</div>
+              <div class="pattern-val" data-pattern="completed">—</div>
+            </div>
+          </div>
         </div>
       </section>
     </div>
