@@ -260,7 +260,9 @@ function el(id) { return document.getElementById(id); }
 /* ---------------- View switching ---------------- */
 
 function setView(view) {
-  if (!VIEWS[view]) view = 'customers';
+  const isStreaming = view === 'streaming';
+  if (!isStreaming && !VIEWS[view]) view = 'customers';
+
   state.view = view;
   state.page = 0;
 
@@ -268,7 +270,17 @@ function setView(view) {
     n.classList.toggle('active', n.dataset.view === view);
   });
 
-  load({ animate: true });
+  // toggle view containers + body mode class
+  document.getElementById('inspectorView').hidden = isStreaming;
+  document.getElementById('streamingView').hidden = !isStreaming;
+  document.body.classList.toggle('mode-streaming', isStreaming);
+
+  if (isStreaming) {
+    streamingActivate();
+  } else {
+    streamingDeactivate();
+    load({ animate: true });
+  }
 }
 
 /* ---------------- Auto-refresh ---------------- */
@@ -276,9 +288,10 @@ function setView(view) {
 function scheduleAutoRefresh() {
   clearTimeout(autoRefreshTimer);
   autoRefreshTimer = setTimeout(async () => {
-    // Refresh counts always; refresh table only on page 0 (newest data)
     await refreshAllCounts();
-    if (state.page === 0 && document.visibilityState === 'visible') {
+    if (state.view !== 'streaming'
+        && state.page === 0
+        && document.visibilityState === 'visible') {
       await load({ animate: false });
     }
     scheduleAutoRefresh();
@@ -352,3 +365,371 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+/* =================================================================== */
+/* STREAMING DASHBOARD — ClickHouse time-series patterns                 */
+/* =================================================================== */
+
+const STREAM_REFRESH_MS = 2000;
+const METRICS_API = '/api/metrics';
+
+const charts = {
+  throughput: null,
+  velocity: null,
+  anomaly: null,
+};
+
+const streamState = {
+  active: false,
+  timer: null,
+  inFlight: 0,
+  withFill: true,
+};
+
+/* ---------------- Chart base (dark + mono theme) ---------------- */
+
+function baseChartOption() {
+  return {
+    backgroundColor: 'transparent',
+    textStyle: { fontFamily: 'JetBrains Mono', fontSize: 11, color: '#a4a4ad' },
+    animation: false,
+    grid: { left: 50, right: 24, top: 14, bottom: 28, containLabel: true },
+    xAxis: {
+      type: 'time',
+      axisLine: { lineStyle: { color: '#2a2a36' } },
+      axisTick: { lineStyle: { color: '#2a2a36' } },
+      axisLabel: {
+        color: '#6c6c78', fontSize: 10,
+        formatter: (v) => {
+          const d = new Date(v);
+          const pad = (n) => String(n).padStart(2, '0');
+          return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        },
+      },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: '#6c6c78', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#1a1a23', type: 'dashed' } },
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#0e0e13',
+      borderColor: '#3d3d4e',
+      borderWidth: 1,
+      padding: [8, 12],
+      textStyle: { color: '#fafafa', fontFamily: 'JetBrains Mono', fontSize: 11 },
+      axisPointer: { lineStyle: { color: '#ffb000', type: 'dashed' } },
+    },
+  };
+}
+
+function initCharts() {
+  if (typeof echarts === 'undefined') return;
+  const ids = ['Throughput', 'Velocity', 'Anomaly'];
+  ids.forEach(name => {
+    const id = 'chart' + name;
+    const key = name.toLowerCase();
+    if (charts[key]) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    charts[key] = echarts.init(el, null, { renderer: 'canvas' });
+  });
+  // resize on window resize
+  if (!window.__streamResizeBound) {
+    window.addEventListener('resize', () => {
+      Object.values(charts).forEach(c => c && c.resize());
+    });
+    window.__streamResizeBound = true;
+  }
+}
+
+/* ---------------- Formatters ---------------- */
+
+function fmtMoneyShort(v) {
+  v = Number(v) || 0;
+  if (v >= 1_000_000_000) return 'Rp ' + (v / 1_000_000_000).toFixed(1) + 'B';
+  if (v >= 1_000_000)     return 'Rp ' + (v / 1_000_000).toFixed(1) + 'M';
+  if (v >= 1_000)         return 'Rp ' + (v / 1_000).toFixed(0) + 'K';
+  return 'Rp ' + new Intl.NumberFormat('id-ID').format(v);
+}
+
+function fmtCountShort(v) {
+  return new Intl.NumberFormat('id-ID').format(Number(v) || 0);
+}
+
+function flashTile(id) {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.classList.remove('flash');
+  void node.offsetWidth;
+  node.classList.add('flash');
+}
+
+/* ---------------- Tile update (multi-window) ---------------- */
+
+function updateTiles(data, elapsedMs) {
+  if (!data) return;
+  const map = {
+    'tile-orders-1m':  fmtCountShort(data.orders_1m),
+    'tile-orders-5m':  fmtCountShort(data.orders_5m),
+    'tile-orders-15m': fmtCountShort(data.orders_15m),
+    'tile-orders-1h':  fmtCountShort(data.orders_1h),
+    'tile-rev-1m':     fmtMoneyShort(data.rev_1m),
+    'tile-rev-5m':     fmtMoneyShort(data.rev_5m),
+    'tile-rev-15m':    fmtMoneyShort(data.rev_15m),
+    'tile-rev-1h':     fmtMoneyShort(data.rev_1h),
+  };
+  for (const [id, val] of Object.entries(map)) {
+    const node = document.getElementById(id);
+    if (!node) continue;
+    if (node.textContent !== val) {
+      node.textContent = val;
+      flashTile(id);
+    }
+  }
+  setText('windowsElapsed', elapsedMs + ' ms');
+}
+
+/* ---------------- Throughput sparkline ---------------- */
+
+function updateThroughput(rows, elapsedMs, withFill) {
+  if (!charts.throughput) return;
+  const points = rows.map(r => [r.minute, Number(r.orders) || 0]);
+  const revPoints = rows.map(r => [r.minute, Number(r.revenue) || 0]);
+
+  const opt = baseChartOption();
+  opt.legend = {
+    data: ['orders', 'revenue'],
+    textStyle: { color: '#a4a4ad', fontSize: 10 },
+    right: 12, top: 0,
+    itemWidth: 14, itemHeight: 2,
+  };
+  opt.grid.top = 26;
+  opt.yAxis = [
+    {
+      type: 'value',
+      name: 'orders',
+      nameTextStyle: { color: '#6c6c78', fontSize: 9, padding: [0, 0, 0, 0] },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: '#6c6c78', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#1a1a23', type: 'dashed' } },
+    },
+    {
+      type: 'value',
+      name: 'Rp',
+      nameTextStyle: { color: '#6c6c78', fontSize: 9 },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: {
+        color: '#6c6c78', fontSize: 10,
+        formatter: (v) => v >= 1_000_000 ? (v / 1_000_000).toFixed(0) + 'M' : (v / 1000).toFixed(0) + 'K',
+      },
+      splitLine: { show: false },
+    },
+  ];
+  opt.tooltip.formatter = (params) => {
+    const ts = new Date(params[0].value[0]);
+    const pad = (n) => String(n).padStart(2, '0');
+    let html = `<div style="color:#fafafa;font-weight:700;margin-bottom:6px">`
+      + `${pad(ts.getHours())}:${pad(ts.getMinutes())}</div>`;
+    for (const p of params) {
+      const isRev = p.seriesName === 'revenue';
+      const v = isRev ? fmtMoneyShort(p.value[1]) : fmtCountShort(p.value[1]);
+      html += `<div><span style="display:inline-block;width:8px;height:2px;background:${p.color};vertical-align:middle;margin-right:6px"></span>`
+        + `<span style="color:#a4a4ad">${p.seriesName}</span> · <span style="color:#fafafa">${v}</span></div>`;
+    }
+    return html;
+  };
+  opt.series = [
+    {
+      name: 'orders',
+      type: 'line',
+      yAxisIndex: 0,
+      smooth: 0.25,
+      symbol: 'none',
+      lineStyle: { color: '#ffb000', width: 1.8 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(255, 176, 0, 0.32)' },
+          { offset: 1, color: 'rgba(255, 176, 0, 0)' },
+        ]),
+      },
+      data: points,
+    },
+    {
+      name: 'revenue',
+      type: 'line',
+      yAxisIndex: 1,
+      smooth: 0.25,
+      symbol: 'none',
+      lineStyle: { color: '#ff7ad9', width: 1.2, type: 'dashed' },
+      data: revPoints,
+    },
+  ];
+  charts.throughput.setOption(opt, { notMerge: true });
+  setText('throughputElapsed', elapsedMs + ' ms' + (withFill ? '' : ' · no fill'));
+}
+
+/* ---------------- Velocity (Δ orders/min) ---------------- */
+
+function updateVelocity(rows, elapsedMs) {
+  if (!charts.velocity) return;
+  const opt = baseChartOption();
+  opt.tooltip.formatter = (params) => {
+    const p = params[0];
+    const ts = new Date(p.value[0]);
+    const pad = (n) => String(n).padStart(2, '0');
+    const v = p.value[1];
+    const sign = v > 0 ? '+' : '';
+    return `<div style="color:#fafafa;font-weight:700;margin-bottom:4px">`
+      + `${pad(ts.getHours())}:${pad(ts.getMinutes())}</div>`
+      + `<div><span style="color:#a4a4ad">Δ orders</span> · `
+      + `<span style="color:${v >= 0 ? '#5ee99d' : '#ff6b6b'};font-weight:700">${sign}${v}</span></div>`;
+  };
+  opt.series = [{
+    type: 'bar',
+    barCategoryGap: '30%',
+    data: rows.map(r => {
+      const v = Number(r.velocity) || 0;
+      return {
+        value: [r.minute, v],
+        itemStyle: {
+          color: v >= 0 ? '#5ee99d' : '#ff6b6b',
+          opacity: v === 0 ? 0.2 : 0.85,
+        },
+      };
+    }),
+  }];
+  charts.velocity.setOption(opt, { notMerge: true });
+  setText('velocityElapsed', elapsedMs + ' ms');
+}
+
+/* ---------------- Anomaly z-score ---------------- */
+
+function updateAnomaly(rows, elapsedMs) {
+  if (!charts.anomaly) return;
+  const opt = baseChartOption();
+  opt.yAxis.min = -4;
+  opt.yAxis.max = 4;
+  opt.tooltip.formatter = (params) => {
+    const p = params[0];
+    const r = rows[p.dataIndex] || {};
+    const ts = new Date(p.value[0]);
+    const pad = (n) => String(n).padStart(2, '0');
+    const z = p.value[1];
+    return `<div style="color:#fafafa;font-weight:700;margin-bottom:4px">`
+      + `${pad(ts.getHours())}:${pad(ts.getMinutes())}</div>`
+      + `<div><span style="color:#a4a4ad">orders</span> · <span style="color:#fafafa">${r.orders ?? '—'}</span></div>`
+      + `<div><span style="color:#a4a4ad">rolling avg</span> · <span style="color:#fafafa">${r.rolling_avg ?? '—'}</span></div>`
+      + `<div><span style="color:#a4a4ad">rolling std</span> · <span style="color:#fafafa">${r.rolling_std ?? '—'}</span></div>`
+      + `<div><span style="color:#a4a4ad">z-score</span> · `
+      + `<span style="color:${Math.abs(z) >= 2 ? '#ff6b6b' : (Math.abs(z) >= 1 ? '#fbbf24' : '#6fbdff')};font-weight:700">${z ?? '—'}</span></div>`;
+  };
+  opt.series = [{
+    type: 'bar',
+    barCategoryGap: '30%',
+    data: rows.map(r => {
+      const z = Number(r.zscore);
+      const valid = isFinite(z);
+      return {
+        value: [r.minute, valid ? z : 0],
+        itemStyle: {
+          color: !valid ? '#3d3d4e'
+            : Math.abs(z) >= 2 ? '#ff6b6b'
+            : Math.abs(z) >= 1 ? '#fbbf24'
+            : '#6fbdff',
+          opacity: !valid ? 0.3 : 0.9,
+        },
+      };
+    }),
+    markLine: {
+      silent: true,
+      symbol: 'none',
+      lineStyle: { color: '#ff6b6b', type: 'dashed', opacity: 0.4 },
+      label: { color: '#ff6b6b', fontSize: 9, formatter: '{c}σ' },
+      data: [{ yAxis: 2 }, { yAxis: -2 }],
+    },
+  }];
+  charts.anomaly.setOption(opt, { notMerge: true });
+  setText('anomalyElapsed', elapsedMs + ' ms');
+}
+
+/* ---------------- Helpers ---------------- */
+
+function setText(id, text) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = text;
+}
+
+async function fetchMetric(path, params = '') {
+  const url = METRICS_API + path + (params ? '?' + params : '');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + path);
+  return res.json();
+}
+
+/* ---------------- Streaming lifecycle ---------------- */
+
+async function streamingLoad() {
+  streamState.inFlight++;
+  const token = streamState.inFlight;
+  try {
+    const [w, t, v, a] = await Promise.all([
+      fetchMetric('/windows'),
+      fetchMetric('/throughput', `withFill=${streamState.withFill}&minutes=60`),
+      fetchMetric('/velocity', 'minutes=30'),
+      fetchMetric('/anomaly', 'minutes=60'),
+    ]);
+    if (token !== streamState.inFlight) return;
+    updateTiles(w.data, w.elapsedMs);
+    updateThroughput(t.data, t.elapsedMs, t.withFill);
+    updateVelocity(v.data, v.elapsedMs);
+    updateAnomaly(a.data, a.elapsedMs);
+
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    setText('streamLastTick',
+      `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`);
+  } catch (e) {
+    console.error('[streaming]', e);
+    setText('streamLastTick', '⚠ ' + (e.message || 'error'));
+  }
+}
+
+function streamingActivate() {
+  streamState.active = true;
+  initCharts();
+  // resize charts on first show (container size changes from hidden)
+  requestAnimationFrame(() => {
+    Object.values(charts).forEach(c => c && c.resize());
+  });
+  streamingLoad();
+  clearTimeout(streamState.timer);
+  const tick = () => {
+    if (!streamState.active) return;
+    if (document.visibilityState === 'visible') streamingLoad();
+    streamState.timer = setTimeout(tick, STREAM_REFRESH_MS);
+  };
+  streamState.timer = setTimeout(tick, STREAM_REFRESH_MS);
+}
+
+function streamingDeactivate() {
+  streamState.active = false;
+  clearTimeout(streamState.timer);
+  streamState.timer = null;
+}
+
+/* ---------------- WITH FILL toggle ---------------- */
+
+document.addEventListener('DOMContentLoaded', () => {
+  const toggle = document.getElementById('withFillToggle');
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      streamState.withFill = toggle.checked;
+      if (streamState.active) streamingLoad();
+    });
+  }
+});

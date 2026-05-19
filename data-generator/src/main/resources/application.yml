@@ -21,6 +21,11 @@ spring:
 server:
   port: 8080
 
+clickhouse:
+  url: jdbc:clickhouse://localhost:8123/shop_analytics?compress=0
+  user: analytics
+  password: analytics
+
 datagen:
   new-customer-rate: 0.3      # peluang bikin customer baru per tick
   order-per-tick: 5           # jumlah order yang dibuat per tick

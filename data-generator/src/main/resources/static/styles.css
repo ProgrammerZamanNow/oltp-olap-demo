@@ -717,6 +717,317 @@ tbody tr:last-child td { border-bottom: none; }
 }
 
 /* =================================================================== */
+/* STREAMING DASHBOARD VIEW                                              */
+/* =================================================================== */
+
+/* --- Nav tag (OLAP badge on streaming tab) --- */
+.nav-tag {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  padding: 2px 6px;
+  background: rgba(255, 122, 217, 0.15);
+  color: var(--magenta);
+  border: 1px solid currentColor;
+}
+
+.nav-item-olap .nav-num   { color: var(--magenta); opacity: 0.8; }
+.nav-item-olap:hover      { color: var(--magenta); }
+.nav-item-olap:hover::before { background: linear-gradient(to bottom, transparent, rgba(255, 122, 217, 0.18)); }
+.nav-item-olap.active     { color: var(--magenta); }
+.nav-item-olap.active .nav-num { color: var(--magenta); }
+.nav-item-olap.active::after { background: var(--magenta); box-shadow: 0 0 14px rgba(255, 122, 217, 0.55); }
+.nav-item-olap.active::before { background: linear-gradient(to bottom, transparent, rgba(255, 122, 217, 0.18)); }
+
+/* --- Body mode toggle: hide statusbar pagination when in streaming --- */
+body.mode-streaming .status-left { display: none; }
+body.mode-streaming .statusbar { justify-content: flex-end; }
+
+/* --- Streaming view wrapper --- */
+#streamingView {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 12px;
+}
+
+/* --- Dash header --- */
+.dash-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 32px;
+  padding-bottom: 20px;
+  border-bottom: 1px dashed var(--border-2);
+}
+
+.dash-eyebrow {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--magenta);
+  margin-bottom: 6px;
+}
+
+.dash-h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--fg-bright);
+  line-height: 1.1;
+  margin: 0 0 8px 0;
+  text-shadow: 0 0 24px rgba(255, 255, 255, 0.06);
+}
+
+.dash-sub {
+  font-size: 12px;
+  color: var(--fg-dim);
+  max-width: 620px;
+  line-height: 1.55;
+}
+
+.dash-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+  min-width: 280px;
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-2);
+  font-size: 11px;
+}
+
+.dash-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.06em;
+}
+
+.ds-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.ds-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--fg-mute);
+}
+
+.ds-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- ClickHouse function badge --- */
+.ch-fn {
+  font-family: var(--font-mono);
+  color: var(--magenta);
+  background: rgba(255, 122, 217, 0.08);
+  border: 1px solid rgba(255, 122, 217, 0.3);
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+/* --- Tiles --- */
+.tiles { display: flex; flex-direction: column; gap: 12px; }
+
+.tiles-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--fg-dim);
+  letter-spacing: 0.04em;
+}
+
+.tiles-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.tile {
+  position: relative;
+  padding: 16px 18px 18px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-2);
+  overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.tile::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.tile.tile-rev::after { background: var(--magenta); }
+
+.tile:hover {
+  border-color: var(--border-bright);
+  transform: translateY(-1px);
+}
+
+.tile-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--fg-mute);
+  margin-bottom: 10px;
+}
+
+.tile-val {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg-bright);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  transition: color 0.2s ease;
+}
+
+.tile-orders .tile-val { color: var(--accent-bright); }
+.tile-rev    .tile-val { color: var(--magenta); }
+
+.tile-val.flash {
+  animation: tile-flash 0.45s ease;
+}
+
+@keyframes tile-flash {
+  0%   { color: var(--fg-bright); transform: scale(1.04); }
+  100% { }
+}
+
+/* --- Card (chart container) --- */
+.card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border-2);
+  display: flex;
+  flex-direction: column;
+}
+
+.card-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--fg-bright);
+  margin: 0;
+}
+
+.card-sub {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.card-controls {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-box {
+  height: 280px;
+  padding: 6px 8px 10px;
+}
+
+.card-row .chart-box { height: 220px; }
+
+/* --- Toggle switch (WITH FILL on/off) --- */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input { position: absolute; opacity: 0; pointer-events: none; }
+
+.toggle-track {
+  display: inline-block;
+  width: 32px;
+  height: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border-bright);
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  background: var(--fg-mute);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.toggle input:checked + .toggle-track {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(16px);
+  background: var(--accent-bright);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.toggle-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: var(--fg-dim);
+}
+
+.toggle input:checked ~ .toggle-label { color: var(--accent-bright); }
+
+/* =================================================================== */
 /* RESPONSIVE                                                            */
 /* =================================================================== */
 
@@ -729,4 +1040,9 @@ tbody tr:last-child td { border-bottom: none; }
   .meta-spacer { display: none; }
   .statusbar { flex-direction: column; gap: 10px; padding: 14px; }
   .status-right { font-size: 10px; }
+  .tile-grid { grid-template-columns: repeat(2, 1fr); }
+  .card-row { grid-template-columns: 1fr; }
+  .dash-header { flex-direction: column; }
+  .dash-status { align-items: flex-start; min-width: 0; width: 100%; }
+  .dash-h1 { font-size: 20px; }
 }

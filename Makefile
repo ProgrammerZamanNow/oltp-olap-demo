@@ -1,6 +1,6 @@
 COMPOSE ?= podman compose
 
-.PHONY: up down rebuild register status logs clean ch psql topics generator-logs generator-host
+.PHONY: up down rebuild register status restart-connector logs clean ch psql topics generator-logs generator-host
 
 up:
 	$(COMPOSE) up -d
@@ -20,7 +20,10 @@ register:
 		http://localhost:8083/connectors | jq .
 
 status:
-	curl -fsS http://localhost:8083/connectors/shop-postgres-source/status | jq .
+	@curl -fsS http://localhost:8083/connectors/shop-postgres-source/status | jq '{connector: .connector.state, tasks: [.tasks[] | {id, state}]}'
+
+restart-connector:
+	@curl -fsS -X POST http://localhost:8083/connectors/shop-postgres-source/tasks/0/restart && echo "task restarted"
 
 logs:
 	$(COMPOSE) logs -f --tail=100

@@ -11,6 +11,7 @@
     rel="stylesheet"
   />
   <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 </head>
 <body>
   <div class="scan-overlay" aria-hidden="true"></div>
@@ -57,6 +58,11 @@
       <span class="nav-label">ORDERS</span>
       <span class="nav-count" data-count="orders">—</span>
     </a>
+    <a href="#streaming" class="nav-item nav-item-olap" data-view="streaming">
+      <span class="nav-num">04</span>
+      <span class="nav-label">STREAMING</span>
+      <span class="nav-tag">OLAP</span>
+    </a>
     <div class="nav-spacer"></div>
     <a class="nav-ext" href="http://localhost:8123/play" target="_blank" rel="noopener">
       <span>CLICKHOUSE</span>
@@ -65,52 +71,190 @@
   </nav>
 
   <main class="content">
-    <section class="meta-row">
-      <div class="meta-block">
-        <span class="meta-label">VIEW</span>
-        <span class="meta-value mono-bright" id="currentView">—</span>
-      </div>
-      <div class="meta-block">
-        <span class="meta-label">SHOWING</span>
-        <span class="meta-value mono-bright" id="showingRange">—</span>
-      </div>
-      <div class="meta-block">
-        <span class="meta-label">TOTAL</span>
-        <span class="meta-value accent" id="totalCount">—</span>
-      </div>
+    <!-- ============ INSPECTOR VIEW (customers / products / orders) ============ -->
+    <div id="inspectorView">
+      <section class="meta-row">
+        <div class="meta-block">
+          <span class="meta-label">VIEW</span>
+          <span class="meta-value mono-bright" id="currentView">—</span>
+        </div>
+        <div class="meta-block">
+          <span class="meta-label">SHOWING</span>
+          <span class="meta-value mono-bright" id="showingRange">—</span>
+        </div>
+        <div class="meta-block">
+          <span class="meta-label">TOTAL</span>
+          <span class="meta-value accent" id="totalCount">—</span>
+        </div>
 
-      <div class="meta-spacer"></div>
+        <div class="meta-spacer"></div>
 
-      <label class="meta-block control">
-        <span class="meta-label">SORT</span>
-        <select id="sortSelect">
-          <option value="createdAt,desc">createdAt ↓ desc</option>
-          <option value="createdAt,asc">createdAt ↑ asc</option>
-        </select>
-      </label>
-      <label class="meta-block control">
-        <span class="meta-label">SIZE</span>
-        <select id="sizeSelect">
-          <option>25</option>
-          <option>50</option>
-          <option selected>100</option>
-          <option>250</option>
-          <option>500</option>
-        </select>
-      </label>
-      <button id="refreshBtn" class="refresh-btn" title="Reload (R)">
-        <span class="refresh-icon">↻</span>
-        <span>RELOAD</span>
-      </button>
-    </section>
+        <label class="meta-block control">
+          <span class="meta-label">SORT</span>
+          <select id="sortSelect">
+            <option value="createdAt,desc">createdAt ↓ desc</option>
+            <option value="createdAt,asc">createdAt ↑ asc</option>
+          </select>
+        </label>
+        <label class="meta-block control">
+          <span class="meta-label">SIZE</span>
+          <select id="sizeSelect">
+            <option>25</option>
+            <option>50</option>
+            <option selected>100</option>
+            <option>250</option>
+            <option>500</option>
+          </select>
+        </label>
+        <button id="refreshBtn" class="refresh-btn" title="Reload (R)">
+          <span class="refresh-icon">↻</span>
+          <span>RELOAD</span>
+        </button>
+      </section>
 
-    <section class="table-wrap" id="tableWrap">
-      <table id="dataTable">
-        <thead></thead>
-        <tbody></tbody>
-      </table>
-      <div class="empty" id="emptyState">── NO DATA ──</div>
-    </section>
+      <section class="table-wrap" id="tableWrap">
+        <table id="dataTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="emptyState">── NO DATA ──</div>
+      </section>
+    </div>
+
+    <!-- ============ STREAMING VIEW (ClickHouse time-series) ============ -->
+    <div id="streamingView" hidden>
+      <section class="dash-header">
+        <div class="dash-title">
+          <span class="dash-eyebrow">CLICKHOUSE · TIME-SERIES</span>
+          <h1 class="dash-h1">REAL-TIME STREAMING PATTERNS</h1>
+          <p class="dash-sub">
+            Big-tile multi-window, gap-fill sparkline, velocity & rolling z-score —
+            semua di-query langsung dari ClickHouse, di-update tiap 2 detik.
+          </p>
+        </div>
+        <div class="dash-status">
+          <div class="dash-status-line">
+            <span class="ds-dot"></span>
+            <span class="ds-label">SOURCE</span>
+            <span class="ds-val">shop_analytics.orders FINAL</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">AUTO-REFRESH</span>
+            <span class="ds-val" id="streamRefreshLabel">2.0s</span>
+          </div>
+          <div class="dash-status-line">
+            <span class="ds-label">LAST TICK</span>
+            <span class="ds-val" id="streamLastTick">--:--:--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- TILES: 8 metrics, 1 single-pass query -->
+      <section class="tiles">
+        <div class="tiles-head">
+          <div class="tiles-head-left">
+            <span class="ch-fn">countIf</span> ·
+            <span class="ch-fn">sumIf</span> — 8 metric dalam 1 query single-pass
+          </div>
+          <div class="tiles-head-right">
+            <span class="ds-label">QUERY</span>
+            <span class="ds-val" id="windowsElapsed">—</span>
+          </div>
+        </div>
+        <div class="tile-grid">
+          <div class="tile tile-orders">
+            <div class="tile-tag">ORDERS · 1m</div>
+            <div class="tile-val" id="tile-orders-1m">—</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">ORDERS · 5m</div>
+            <div class="tile-val" id="tile-orders-5m">—</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">ORDERS · 15m</div>
+            <div class="tile-val" id="tile-orders-15m">—</div>
+          </div>
+          <div class="tile tile-orders">
+            <div class="tile-tag">ORDERS · 1h</div>
+            <div class="tile-val" id="tile-orders-1h">—</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">REV · 1m</div>
+            <div class="tile-val" id="tile-rev-1m">—</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">REV · 5m</div>
+            <div class="tile-val" id="tile-rev-5m">—</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">REV · 15m</div>
+            <div class="tile-val" id="tile-rev-15m">—</div>
+          </div>
+          <div class="tile tile-rev">
+            <div class="tile-tag">REV · 1h</div>
+            <div class="tile-val" id="tile-rev-1h">—</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- THROUGHPUT SPARKLINE -->
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">THROUGHPUT · 60 menit</h2>
+            <div class="card-sub">
+              <span class="ch-fn">WITH FILL STEP toIntervalMinute(1)</span> — auto-isi menit kosong
+            </div>
+          </div>
+          <div class="card-controls">
+            <label class="toggle">
+              <input type="checkbox" id="withFillToggle" checked />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              <span class="toggle-label">WITH FILL</span>
+            </label>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="throughputElapsed">—</span>
+            </div>
+          </div>
+        </header>
+        <div class="chart-box" id="chartThroughput"></div>
+      </section>
+
+      <!-- VELOCITY + ANOMALY side by side -->
+      <section class="card-row">
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">VELOCITY · Δ orders/min</h2>
+              <div class="card-sub">
+                <span class="ch-fn">lagInFrame()</span> — turunan pertama, positif = akselerasi
+              </div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="velocityElapsed">—</span>
+            </div>
+          </header>
+          <div class="chart-box" id="chartVelocity"></div>
+        </div>
+        <div class="card">
+          <header class="card-head">
+            <div>
+              <h2 class="card-title">ANOMALY · rolling z-score</h2>
+              <div class="card-sub">
+                <span class="ch-fn">avg/stddevPop OVER (ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING)</span>
+              </div>
+            </div>
+            <div class="card-meta">
+              <span class="ds-label">QUERY</span>
+              <span class="ds-val" id="anomalyElapsed">—</span>
+            </div>
+          </header>
+          <div class="chart-box" id="chartAnomaly"></div>
+        </div>
+      </section>
+    </div>
   </main>
 
   <footer class="statusbar">

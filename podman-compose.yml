@@ -118,6 +118,9 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/shop
       SPRING_DATASOURCE_USERNAME: shop
       SPRING_DATASOURCE_PASSWORD: shop
+      CLICKHOUSE_URL: jdbc:clickhouse://clickhouse:8123/shop_analytics?compress=0
+      CLICKHOUSE_USER: analytics
+      CLICKHOUSE_PASSWORD: analytics
     restart: unless-stopped
 
 volumes:
