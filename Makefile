@@ -1,12 +1,15 @@
 COMPOSE ?= podman compose
 
-.PHONY: up down register status logs clean ch psql topics generator
+.PHONY: up down rebuild register status logs clean ch psql topics generator-logs generator-host
 
 up:
 	$(COMPOSE) up -d
 
 down:
 	$(COMPOSE) down
+
+rebuild:
+	$(COMPOSE) up -d --build generator
 
 clean:
 	$(COMPOSE) down -v
@@ -22,8 +25,11 @@ status:
 logs:
 	$(COMPOSE) logs -f --tail=100
 
+generator-logs:
+	$(COMPOSE) logs -f --tail=100 generator
+
 psql:
-	psql postgresql://shop:shop@localhost:5433/shop
+	psql postgresql://shop:shop@localhost:15432/shop
 
 ch:
 	podman exec -it olap-clickhouse clickhouse-client --user analytics --password analytics --database shop_analytics
@@ -31,5 +37,5 @@ ch:
 topics:
 	podman exec -it oltp-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
-generator:
-	cd data-generator && ./mvnw spring-boot:run
+generator-host:
+	cd data-generator && mvn spring-boot:run

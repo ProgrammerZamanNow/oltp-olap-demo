@@ -17,7 +17,7 @@ generator     (OLTP)       baca WAL via pgoutput       shop.public.*   Kafka eng
                                                                        → ReplacingMergeTree
 ```
 
-5 komponen, 4 container + 1 host-side Spring Boot app.
+5 komponen, semuanya jalan sebagai container via `podman-compose.yml`. Generator di-build dari `data-generator/Dockerfile` (multi-stage maven → jre 21). Untuk fast iteration tanpa rebuild image, masih bisa run dari host pakai `make generator-host` — `application.yml` default-nya connect ke `localhost:15432`, sedangkan service compose override via `SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/shop`.
 
 ### Keputusan Teknis Penting
 
@@ -33,7 +33,7 @@ generator     (OLTP)       baca WAL via pgoutput       shop.public.*   Kafka eng
 | `ReplacingMergeTree(updated_at)` | Versi terbaru per PK menang setelah background merge. Query ad-hoc pakai `FINAL` untuk dedup at query-time. |
 | Soft delete via `is_deleted` UInt8 | Bukan DELETE FROM. Filter `WHERE is_deleted = 0` saat query. Konsisten dengan event-based CDC. |
 | Sintaks `FINAL` di ClickHouse | Harus **setelah alias**: `FROM tbl AS x FINAL`, BUKAN `FROM tbl FINAL AS x`. |
-| Port Postgres host = `5433` (bukan 5432) | User punya Postgres lokal di 5432. Container internal tetap 5432. Generator's `application.yml` connect ke `jdbc:postgresql://localhost:5433/shop`. |
+| Port Postgres host = `15432` (bukan 5432 / 5433) | User punya Postgres lokal di 5432, dan port dev umum lain (5433) juga sering dipakai. Pakai 15432 yang very uncommon untuk hindari bentrok. Container internal tetap 5432. Generator's `application.yml` connect ke `jdbc:postgresql://localhost:15432/shop`. Service compose pakai DNS internal `postgres:5432` via env `SPRING_DATASOURCE_URL`. |
 | Tidak ada volume Kafka di compose | Sengaja — restart `down` akan wipe topic & connector configs. Demo ulang dari snapshot lebih bersih. (Untuk production: tambahkan volume.) |
 
 ## Setup & Run
@@ -43,7 +43,7 @@ generator     (OLTP)       baca WAL via pgoutput       shop.public.*   Kafka eng
 podman machine set --memory 6144 --cpus 4
 podman machine start
 
-# Stack up
+# Stack up (build image generator + jalankan 5 container)
 make up         # podman compose up -d
 
 # Tunggu ~30 detik, register Debezium connector
@@ -52,8 +52,18 @@ make register   # POST debezium/postgres-connector.json ke localhost:8083
 # Cek connector RUNNING
 make status
 
-# Generator (terminal lain, butuh Java 21 + Maven)
-make generator
+# Generator log (sudah auto-jalan via compose)
+make generator-logs
+
+# Inspect data OLTP via REST API generator (port 8080)
+curl -s http://localhost:8080/api/orders | jq
+# query params: ?page=0&size=100&sort=createdAt,desc — default size=100, sort=createdAt DESC
+
+# Atau rebuild kalau code generator berubah
+make rebuild
+
+# Opsional: jalankan generator dari host (fast iteration, butuh Java 21 + mvn)
+make generator-host
 
 # Eksplorasi data
 make ch         # clickhouse-client interaktif (CLI)
@@ -73,20 +83,32 @@ make topics     # list Kafka topic
 
 ```
 .
-├── podman-compose.yml             # 4 services: postgres, kafka, connect, clickhouse
+├── podman-compose.yml             # 5 services: postgres, kafka, connect, clickhouse, generator
 ├── Makefile                       # Shortcut command
 ├── README.md                      # Quick start + mermaid diagram + sample queries
 ├── clickhouse.md                  # 7 section query reference (lihat di bawah)
 ├── postgres/init.sql              # Schema + REPLICA IDENTITY FULL + publication + seed products
 ├── clickhouse/init.sql            # Kafka source tables + MV + ReplacingMergeTree targets
 ├── debezium/postgres-connector.json  # Source connector config (unwrap SMT)
-└── data-generator/                # Spring Boot 3.3 + JPA + Datafaker
+└── data-generator/                # Spring Boot 3.3 + JPA + Web + Datafaker
+    ├── Dockerfile                 # multi-stage: maven:3.9-eclipse-temurin-21 → eclipse-temurin:21-jre
+    ├── .dockerignore
     ├── pom.xml
     └── src/main/...
-        ├── entity/ (Customer, Product, Order, OrderItem)
-        ├── repository/ (Spring Data JPA, dengan native query random pick)
-        ├── service/DataGeneratorService.java  # @Scheduled every 2s
-        └── DataGeneratorApplication.java
+        ├── java/com/example/datagen/
+        │   ├── entity/ (Customer, Product, Order, OrderItem)
+        │   ├── repository/ (Spring Data JPA, dengan native query random pick)
+        │   ├── service/DataGeneratorService.java     # @Scheduled every 2s
+        │   ├── controller/ (CustomerController, ProductController, OrderController)
+        │   │                                          # GET /api/{customers,products,orders}
+        │   │                                          # Page<T>, default size=100, sort=createdAt DESC
+        │   └── DataGeneratorApplication.java
+        └── resources/
+            ├── application.yml
+            └── static/                                # Stream Inspector UI di http://localhost:8080
+                ├── index.html                        # SPA shell, top nav, table, pagination
+                ├── styles.css                        # terminal-brutalist dark + amber accent
+                └── app.js                            # fetch /api/*, render, pagination, auto-refresh 5s
 ```
 
 ## clickhouse.md Struktur
@@ -107,7 +129,7 @@ Untuk referensi kalau besok ada problem mirip:
 
 1. **`bitnami/kafka:3.8` manifest unknown** — tag dihapus dari Docker Hub. Diganti `apache/kafka:3.8.0` dengan env var berbeda (tanpa `KAFKA_CFG_` prefix). Path binary juga beda: `/opt/kafka/bin/` bukan `/opt/bitnami/kafka/bin/`.
 
-2. **Postgres "role shop does not exist"** — bentrok dengan Postgres lokal di port 5432. Host port di compose dipindah ke `5433`, generator's `application.yml` mengikuti.
+2. **Postgres "role shop does not exist"** — bentrok dengan Postgres lokal di port 5432. Host port di compose dipindah ke `15432` (sempat pakai 5433 tapi diganti supaya bebas dari port dev lain juga), generator's `application.yml` mengikuti.
 
 3. **ClickHouse 0 rows meski connector RUNNING** — saya salah asumsi `time.precision.mode=connect` emit Int64 millis. Aktualnya emit ISO 8601 string. Setelah ganti tipe Kafka table jadi `String` + `parseDateTime64BestEffort`, perlu **reset consumer offset** karena offset sebelumnya sudah committed past broken messages (`kafka_skip_broken_messages = 100`). Cara reset: DETACH MV + DETACH Kafka table → `kafka-consumer-groups.sh --reset-offsets --to-earliest` → ATTACH balik.
 

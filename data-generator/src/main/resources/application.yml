@@ -1,6 +1,6 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5433/shop
+    url: jdbc:postgresql://localhost:15432/shop
     username: shop
     password: shop
   jpa:
@@ -11,6 +11,15 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  data:
+    web:
+      pageable:
+        default-page-size: 100
+        max-page-size: 1000
+        one-indexed-parameters: false
+
+server:
+  port: 8080
 
 datagen:
   new-customer-rate: 0.3      # peluang bikin customer baru per tick

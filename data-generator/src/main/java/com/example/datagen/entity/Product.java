@@ -44,7 +44,10 @@ public class Product {
 
     public Long getId() { return id; }
     public String getName() { return name; }
+    public String getCategory() { return category; }
     public BigDecimal getPrice() { return price; }
     public Integer getStock() { return stock; }
     public void setStock(Integer stock) { this.stock = stock; }
+    public OffsetDateTime getCreatedAt() { return createdAt; }
+    public OffsetDateTime getUpdatedAt() { return updatedAt; }
 }

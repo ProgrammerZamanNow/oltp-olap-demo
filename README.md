@@ -21,14 +21,15 @@ flowchart LR
 ## Prasyarat
 
 - Podman 4+ (atau `podman-compose`) — semua command pakai `podman compose`
-- Java 21 + Maven (untuk run generator)
 - `curl`, `jq` (opsional, untuk register connector)
 - `psql` client (opsional)
+- Java 21 + Maven hanya kalau mau run generator dari host (`make generator-host`); kalau via compose tidak perlu
 
 ## Quick Start
 
 ```bash
-# 1. Naikkan stack (Postgres, Kafka, Connect, ClickHouse)
+# 1. Naikkan stack (Postgres, Kafka, Connect, ClickHouse, Generator)
+#    Pertama kali akan build image generator dari Dockerfile (~1-2 menit).
 make up
 
 # 2. Tunggu sampai Connect siap (~30 detik), lalu register connector
@@ -37,12 +38,62 @@ make register
 # 3. Cek status connector — pastikan state RUNNING
 make status
 
-# 4. Run generator (terminal baru)
-make generator
+# 4. Pantau generator (sudah jalan otomatis di container)
+make generator-logs
 
 # 5. Buka ClickHouse client (terminal baru) dan jalankan query analytics
 make ch
 ```
+
+Kalau code generator berubah, rebuild image-nya:
+
+```bash
+make rebuild
+```
+
+## Stream Inspector UI
+
+Generator juga punya UI terminal-style untuk eksplorasi data OLTP secara real-time. Buka di browser:
+
+```
+http://localhost:8080
+```
+
+Fitur:
+- Top navigation: Customers / Products / Orders + shortcut tombol `1` / `2` / `3`
+- Pagination (`← / →` arrow keys), pilih page size 25/50/100/250/500
+- Sort by `createdAt` (asc/desc) — atau bebas pakai query param
+- Auto-refresh tiap 5 detik di page pertama (data streaming dari `@Scheduled` tick)
+- Live count badge per tab — flash kuning kalau ada baris baru
+- Status pill warna-warni untuk order status (PLACED / PAID / SHIPPED / DELIVERED / CANCELLED)
+
+## REST API Generator
+
+Backend yang dipakai UI di atas (port 8080):
+
+```
+GET /api/customers
+GET /api/products
+GET /api/orders
+```
+
+Semua endpoint pakai pagination Spring Data (default `size=100`, sort `createdAt DESC`):
+
+```bash
+# default — 100 row terbaru
+curl -s http://localhost:8080/api/orders | jq
+
+# halaman ke-2, 50 row per halaman
+curl -s "http://localhost:8080/api/orders?page=1&size=50" | jq
+
+# sort ascending
+curl -s "http://localhost:8080/api/customers?sort=createdAt,asc" | jq
+
+# multi-sort
+curl -s "http://localhost:8080/api/products?sort=category,asc&sort=price,desc" | jq
+```
+
+Response berbentuk `Page<T>` (Spring Data) — body utama di `content[]`, metadata pagination di `totalElements`, `totalPages`, `number`, `size`.
 
 Stop tanpa hapus data:
 
@@ -168,4 +219,4 @@ SELECT count() FROM order_items;
 
 - **Connector REGISTRATION failed: replication slot already exists** → `make clean` lalu `make up` ulang, atau drop slot manual: `SELECT pg_drop_replication_slot('debezium_shop');`
 - **ClickHouse tidak menerima data** → cek connector status `make status`. Pastikan topik Kafka ada (`make topics`). Cek error: `podman logs olap-clickhouse | grep -i kafka`.
-- **Generator gagal connect Postgres** → host port di-set ke `5433` (container internal tetap 5432) untuk menghindari bentrok dengan Postgres lokal.
+- **Generator gagal connect Postgres** → host port di-set ke `15432` (container internal tetap 5432) untuk menghindari bentrok dengan Postgres lokal di 5432 maupun port dev umum lain. Kalau 15432 juga sudah dipakai, ganti di `podman-compose.yml` + `data-generator/src/main/resources/application.yml` + `Makefile`.

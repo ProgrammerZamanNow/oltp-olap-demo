@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OLTP → OLAP // Stream Inspector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@100..800&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="scan-overlay" aria-hidden="true"></div>
+  <div class="grid-overlay" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">OLTP</span>
+      <span class="brand-arrow">━━▶</span>
+      <span class="brand-mark">OLAP</span>
+      <span class="brand-divider"></span>
+      <span class="brand-tag">STREAM&nbsp;INSPECTOR</span>
+      <span class="brand-ver">v1.0</span>
+    </div>
+
+    <div class="topbar-meta">
+      <div class="endpoint-pill">
+        <span class="endpoint-dot"></span>
+        <span class="endpoint-label">API</span>
+        <span class="endpoint-val">/api/*</span>
+      </div>
+      <div class="live-indicator">
+        <span class="pulse" aria-hidden="true"></span>
+        <span class="live-label">LIVE</span>
+        <span class="live-sep">·</span>
+        <span class="live-tick" id="lastUpdate">--:--:--</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="nav" aria-label="primary">
+    <a href="#customers" class="nav-item" data-view="customers">
+      <span class="nav-num">01</span>
+      <span class="nav-label">CUSTOMERS</span>
+      <span class="nav-count" data-count="customers">—</span>
+    </a>
+    <a href="#products" class="nav-item" data-view="products">
+      <span class="nav-num">02</span>
+      <span class="nav-label">PRODUCTS</span>
+      <span class="nav-count" data-count="products">—</span>
+    </a>
+    <a href="#orders" class="nav-item" data-view="orders">
+      <span class="nav-num">03</span>
+      <span class="nav-label">ORDERS</span>
+      <span class="nav-count" data-count="orders">—</span>
+    </a>
+    <div class="nav-spacer"></div>
+    <a class="nav-ext" href="http://localhost:8123/play" target="_blank" rel="noopener">
+      <span>CLICKHOUSE</span>
+      <span class="ext-arrow">↗</span>
+    </a>
+  </nav>
+
+  <main class="content">
+    <section class="meta-row">
+      <div class="meta-block">
+        <span class="meta-label">VIEW</span>
+        <span class="meta-value mono-bright" id="currentView">—</span>
+      </div>
+      <div class="meta-block">
+        <span class="meta-label">SHOWING</span>
+        <span class="meta-value mono-bright" id="showingRange">—</span>
+      </div>
+      <div class="meta-block">
+        <span class="meta-label">TOTAL</span>
+        <span class="meta-value accent" id="totalCount">—</span>
+      </div>
+
+      <div class="meta-spacer"></div>
+
+      <label class="meta-block control">
+        <span class="meta-label">SORT</span>
+        <select id="sortSelect">
+          <option value="createdAt,desc">createdAt ↓ desc</option>
+          <option value="createdAt,asc">createdAt ↑ asc</option>
+        </select>
+      </label>
+      <label class="meta-block control">
+        <span class="meta-label">SIZE</span>
+        <select id="sizeSelect">
+          <option>25</option>
+          <option>50</option>
+          <option selected>100</option>
+          <option>250</option>
+          <option>500</option>
+        </select>
+      </label>
+      <button id="refreshBtn" class="refresh-btn" title="Reload (R)">
+        <span class="refresh-icon">↻</span>
+        <span>RELOAD</span>
+      </button>
+    </section>
+
+    <section class="table-wrap" id="tableWrap">
+      <table id="dataTable">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="emptyState">── NO DATA ──</div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <div class="status-left">
+      <button class="page-btn" id="firstBtn" title="First page">⟪&nbsp;FIRST</button>
+      <button class="page-btn" id="prevBtn" title="Previous page">←&nbsp;PREV</button>
+      <span class="page-info">
+        <span class="page-info-label">PAGE</span>
+        <strong id="pageNum">—</strong>
+        <span class="page-info-sep">/</span>
+        <span id="pageTotal">—</span>
+      </span>
+      <button class="page-btn" id="nextBtn" title="Next page">NEXT&nbsp;→</button>
+      <button class="page-btn" id="lastBtn" title="Last page">LAST&nbsp;⟫</button>
+    </div>
+    <div class="status-right">
+      <span class="status-label">SORT&nbsp;BY</span>
+      <span class="status-value" id="sortDisplay">createdAt&nbsp;↓</span>
+      <span class="status-sep">·</span>
+      <span class="status-label">FETCHED&nbsp;IN</span>
+      <span class="status-value" id="fetchTime">— ms</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

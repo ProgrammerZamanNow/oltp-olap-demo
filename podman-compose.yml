@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: shop
       POSTGRES_PASSWORD: shop
     ports:
-      - "5433:5432"
+      - "15432:5432"
     volumes:
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:Z
       - postgres-data:/var/lib/postgresql/data
@@ -103,6 +103,22 @@ services:
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:Z
       - clickhouse-data:/var/lib/clickhouse
+
+  generator:
+    build:
+      context: ./data-generator
+    image: localhost/oltp-olap-demo-generator:latest
+    container_name: oltp-generator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/shop
+      SPRING_DATASOURCE_USERNAME: shop
+      SPRING_DATASOURCE_PASSWORD: shop
+    restart: unless-stopped
 
 volumes:
   postgres-data:
