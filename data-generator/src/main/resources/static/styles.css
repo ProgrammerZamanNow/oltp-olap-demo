@@ -743,8 +743,15 @@ tbody tr:last-child td { border-bottom: none; }
 body.mode-streaming .status-left { display: none; }
 body.mode-streaming .statusbar { justify-content: flex-end; }
 
-/* --- Streaming view wrapper --- */
-#streamingView {
+/* --- Dashboard view wrappers --- */
+/* CSS display rule mengalahkan HTML `hidden` attribute, jadi harus reset eksplisit */
+#streamingView[hidden],
+#funnelView[hidden] {
+  display: none !important;
+}
+
+#streamingView,
+#funnelView {
   display: flex;
   flex-direction: column;
   gap: 18px;
