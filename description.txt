@@ -1,0 +1,65 @@
+Pernah dengar database yang bisa scan MILIARAN baris data dalam hitungan
+detik? Namanya ClickHouse — dan kalau kamu kerja dengan data, kamu WAJIB
+tahu database ini.
+
+Di video ini kita nggak cuma teori. Kita bangun langsung pipeline data
+lengkap dari nol: data transaksi dari PostgreSQL mengalir secara real-time
+ke ClickHouse, lalu kita eksplorasi kekuatan analitiknya lewat dashboard
+demo yang interaktif.
+
+Yang akan kamu pelajari di video ini:
+
+✅ Beda OLTP vs OLAP — kenapa satu database saja tidak cukup
+✅ Change Data Capture (CDC) — sinkronisasi data real-time tanpa batch ETL
+✅ Debezium — menangkap setiap perubahan dari PostgreSQL
+✅ Apache Kafka — message broker sebagai jembatan data
+✅ ClickHouse — database OLAP columnar yang super cepat
+✅ Fitur-fitur ClickHouse: Streaming analytics, Funnel, Distribution, Pre-Aggregation, sampai Time Travel
+
+Pipeline yang kita bangun:
+PostgreSQL (OLTP) → Debezium → Apache Kafka → ClickHouse (OLAP)
+
+ClickHouse bukan pengganti database transaksional — dia pelengkap. Setelah
+nonton video ini, kamu bakal paham kapan dan kenapa harus pakai database
+OLAP, dan betapa powerful-nya ClickHouse untuk kebutuhan analytics.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏱ TIMELINE VIDEO
+
+00:00 - Pendahuluan
+01:38 - Masalah OLTP vs OLAP
+06:41 - Sinkronisasi CDC
+09:23 - Stack Teknologi
+11:46 - Debezium Change Data Capture
+14:46 - ClickHouse Database OLAP
+25:39 - Aplikasi Demo
+29:26 - Streaming
+36:05 - Funnel
+41:11 - Distribution
+45:25 - Pre Aggregate
+50:05 - Time Travel
+54:08 - Penutup
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💻 SOURCE CODE
+
+Semua kode demo di video ini open-source. Silakan clone dan jalankan
+sendiri — cukup satu perintah dan seluruh stack langsung nyala:
+
+https://github.com/ProgrammerZamanNow/oltp-olap-demo
+
+Teknologi yang dipakai: PostgreSQL, Debezium, Apache Kafka, ClickHouse,
+Spring Boot, dan Podman.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Kalau video ini bermanfaat, jangan lupa LIKE, SUBSCRIBE, dan nyalakan
+LONCENG biar nggak ketinggalan video berikutnya.
+
+Tulis di kolom komentar — fitur ClickHouse mana yang paling bikin kamu
+kaget? 👇
+
+#ClickHouse #Database #OLAP #Debezium #Kafka #PostgreSQL #DataEngineering
+#ProgrammerZamanNow #BelajarProgramming
